@@ -32,9 +32,9 @@ public final class LevelMeterView extends VBox {
         reduction.setProgress(Math.min(1.0, value.totalReductionDb() / 30.0));
         reductionValue.setText(String.format("%.1f dB", value.totalReductionDb()));
         limiting.setVisible(value.limiterReductionDb() > 0.1);
-        diagnostics.setText(String.format("Bloques: %,d · CPU DSP: %.1f%% · media: %.0f µs · máx: %.0f µs · latencia estimada: %.1f ms",
-                value.blocksProcessed(), value.processingBudgetPercent(), value.averageProcessingMicros(),
-                value.maximumProcessingMicros(), value.estimatedLatencyMillis()));
+        diagnostics.setText(String.format("Bloques: %,d · CPU DSP: %.1f%% · búfer: %.1f ms · sincronía: %+.0f ppm · latencia: %.1f ms",
+                value.blocksProcessed(), value.processingBudgetPercent(), value.adaptiveBufferMillis(),
+                value.playbackRateCorrectionPpm(), value.estimatedLatencyMillis()));
     }
 
     private static ProgressBar meter() { ProgressBar bar = new ProgressBar(0); bar.setMaxWidth(Double.MAX_VALUE); return bar; }

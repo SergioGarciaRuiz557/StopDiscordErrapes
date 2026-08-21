@@ -22,7 +22,7 @@ public final class DeviceSelectionView extends VBox {
         grid.getColumnConstraints().addAll(labels, fields);
         grid.addRow(0, new Label("Entrada"), input);
         grid.addRow(1, new Label("Salida"), output);
-        HBox footer = new HBox(12, refresh, new Label("48.000 Hz · PCM 16-bit · estéreo · bloque de 256 frames"));
+        HBox footer = new HBox(12, refresh, new Label("48.000 Hz · PCM 16-bit · estéreo · bloque de 128 frames"));
         getChildren().addAll(title, grid, footer);
     }
 

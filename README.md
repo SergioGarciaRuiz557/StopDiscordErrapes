@@ -118,7 +118,7 @@ ui/                vistas JavaFX y actualización de métricas a 25 Hz
 tools/             generador de señales de desarrollo
 ```
 
-El hilo de audio reutiliza buffers de bytes y `float`, no usa streams ni colecciones dinámicas y no accede a JavaFX, disco o red. Los parámetros se publican con una referencia atómica y se aplican al comienzo de un bloque. Las métricas son campos volátiles de escritor único; la interfaz crea snapshots fuera del hilo crítico.
+La captura y la reproducción usan hilos separados y un búfer PCM adaptativo para absorber el *jitter* de Windows y de Java Sound. Como VB-CABLE y la salida física tienen relojes independientes, el lector ajusta suavemente su velocidad en un margen máximo de ±0,5 % mediante interpolación lineal, manteniendo estable la reserva sin descartar bloques ni insertar silencios. Antes de arrancar los auriculares, el motor precarga tanto el búfer adaptativo como el del dispositivo. Ambos hilos reutilizan buffers de bytes y `float`, no usan streams ni colecciones dinámicas y no acceden a JavaFX, disco o red. Los parámetros se publican con una referencia atómica y se aplican al comienzo de un bloque; la interfaz crea snapshots fuera de los hilos críticos.
 
 La latencia mostrada es una **estimación teórica** basada en tamaños de buffer reportados por Java Sound y el lookahead. No es una medición física extremo a extremo. La latencia real depende de Java Sound, los controladores, Windows, VB-CABLE y el dispositivo físico.
 

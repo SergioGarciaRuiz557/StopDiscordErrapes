@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 
 public final class JavaSoundAudioBackend implements AudioBackend {
+    private static final int MINIMUM_STABLE_BUFFER_BLOCKS = 12;
     private final AudioDeviceScanner scanner = new AudioDeviceScanner();
 
     @Override public List<AudioDeviceDescriptor> scanDevices(AudioFormatConfiguration format) { return scanner.scan(format); }
@@ -24,7 +25,7 @@ public final class JavaSoundAudioBackend implements AudioBackend {
             DataLine.Info lineInfo = new DataLine.Info(TargetDataLine.class, format);
             if (!mixer.isLineSupported(lineInfo)) throw unsupported(device, configuration);
             TargetDataLine line = (TargetDataLine) mixer.getLine(lineInfo);
-            line.open(format, configuration.blockBytes() * Math.max(2, bufferBlocks));
+            line.open(format, configuration.blockBytes() * Math.max(MINIMUM_STABLE_BUFFER_BLOCKS, bufferBlocks));
             return new JavaSoundAudioInput(line);
         } catch (LineUnavailableException exception) {
             throw new AudioDeviceException("No se pudo abrir la línea de entrada “" + device.name() + "”: " + exception.getMessage(), exception);
@@ -40,7 +41,7 @@ public final class JavaSoundAudioBackend implements AudioBackend {
             DataLine.Info lineInfo = new DataLine.Info(SourceDataLine.class, format);
             if (!mixer.isLineSupported(lineInfo)) throw unsupported(device, configuration);
             SourceDataLine line = (SourceDataLine) mixer.getLine(lineInfo);
-            line.open(format, configuration.blockBytes() * Math.max(2, bufferBlocks));
+            line.open(format, configuration.blockBytes() * Math.max(MINIMUM_STABLE_BUFFER_BLOCKS, bufferBlocks));
             return new JavaSoundAudioOutput(line);
         } catch (LineUnavailableException exception) {
             throw new AudioDeviceException("No se pudo abrir la línea de salida “" + device.name() + "”: " + exception.getMessage(), exception);
