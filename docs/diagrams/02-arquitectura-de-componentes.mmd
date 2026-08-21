@@ -1,0 +1,72 @@
+flowchart TB
+    subgraph presentation["Presentación"]
+        app["DiscordAudioGuardApplication"]
+        mvc["MainViewController"]
+        views["MainView + subviews"]
+    end
+
+    subgraph coordination["Coordinación"]
+        controller["ApplicationController"]
+        appState["ApplicationState"]
+    end
+
+    subgraph engine["Motor de audio"]
+        audioEngine["AudioEngine"]
+        pipeline["AudioPipeline"]
+        adaptive["AdaptivePcmBuffer"]
+        metrics["AudioMetrics"]
+    end
+
+    subgraph contracts["Contratos"]
+        backendApi["AudioBackend"]
+        ioApi["AudioInput / AudioOutput"]
+        processorApi["AudioProcessor"]
+    end
+
+    subgraph implementation["Implementaciones"]
+        javaSound["JavaSoundAudioBackend"]
+        lines["JavaSoundAudioInput / Output"]
+        dsp["DynamicsProcessor"]
+        codecs["Pcm16Decoder / Encoder"]
+    end
+
+    subgraph persistence["Persistencia"]
+        repoApi["ConfigurationRepository"]
+        jsonRepo["JsonConfigurationRepository"]
+        configuration["ApplicationConfiguration"]
+    end
+
+    app --> mvc
+    app --> controller
+    mvc --> views
+    mvc --> controller
+    controller --> appState
+    controller --> audioEngine
+    controller --> metrics
+    controller --> javaSound
+    controller --> dsp
+    controller --> repoApi
+    repoApi -.implemented by.-> jsonRepo
+    jsonRepo --> configuration
+    audioEngine --> backendApi
+    audioEngine --> processorApi
+    audioEngine --> pipeline
+    audioEngine --> adaptive
+    audioEngine --> metrics
+    javaSound -.implements.-> backendApi
+    lines -.implement.-> ioApi
+    javaSound --> lines
+    dsp -.implements.-> processorApi
+    pipeline --> codecs
+    pipeline --> dsp
+
+    classDef ui fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef core fill:#cffafe,stroke:#0891b2,color:#083344
+    classDef api fill:#f3f4f6,stroke:#4b5563,color:#111827
+    classDef impl fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef data fill:#fef3c7,stroke:#d97706,color:#451a03
+    class app,mvc,views ui
+    class controller,appState,audioEngine,pipeline,adaptive,metrics core
+    class backendApi,ioApi,processorApi,repoApi api
+    class javaSound,lines,dsp,codecs impl
+    class jsonRepo,configuration data

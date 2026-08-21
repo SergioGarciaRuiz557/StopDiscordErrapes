@@ -1,0 +1,31 @@
+flowchart TD
+    launch["Arranque de aplicación"] --> exists{"¿Existe config.json?"}
+    exists -->|"no"| defaults["ApplicationConfiguration.defaults()"]
+    exists -->|"sí"| deserialize["Jackson deserializa records"]
+    deserialize --> valid{"¿JSON y rangos válidos?"}
+    valid -->|"sí"| memory["Snapshot de configuración en memoria"]
+    valid -->|"no"| preserve["Renombra a config.corrupt-fecha.json"]
+    preserve --> defaults
+    defaults --> memory
+
+    devices["Usuario selecciona dispositivos"] --> immutable["withDevices(...)"]
+    dsp["Usuario cambia DSP"] --> immutable2["withProcessing(...)"]
+    window["Cierre / geometría"] --> immutable3["withWindow(...)"]
+    intro["Introducción mostrada"] --> immutable4["withFirstRun(false)"]
+
+    immutable --> memory
+    immutable2 --> memory
+    immutable3 --> memory
+    immutable4 --> memory
+
+    memory --> save["Escribe config.json.tmp"]
+    save --> atomic{"¿ATOMIC_MOVE disponible?"}
+    atomic -->|"sí"| replace["Reemplazo atómico de config.json"]
+    atomic -->|"no"| fallback["Reemplazo normal"]
+
+    classDef action fill:#cffafe,stroke:#0891b2,color:#083344
+    classDef decision fill:#fef3c7,stroke:#d97706,color:#451a03
+    classDef state fill:#dcfce7,stroke:#16a34a,color:#052e16
+    class launch,deserialize,preserve,devices,dsp,window,intro,immutable,immutable2,immutable3,immutable4,save,replace,fallback action
+    class exists,valid,atomic decision
+    class defaults,memory state

@@ -1,0 +1,54 @@
+flowchart TB
+    input["Entrada float estéreo"]
+    inputMeter["LevelMeter<br/>pico L/R + RMS"]
+    detector["Detector enlazado<br/>max(|L|, |R|)"]
+    envelope["EnvelopeFollower<br/>attack / release"]
+    curve["Curva de compresión<br/>threshold + ratio + knee"]
+    smoother["GainSmoother<br/>ganancia en dB"]
+    compGain["Ganancia compresor<br/>+ makeup"]
+    delay["LookaheadBuffer<br/>delay circular"]
+    peak["Pico de ventana<br/>L/R enlazado"]
+    limiterGain["Ganancia limitador<br/>ceiling + release"]
+    wet["Señal procesada"]
+    bypass["Crossfade dry/wet<br/>5 ms"]
+    finalGain["Ganancia máxima final"]
+    clamp["Clamp [-1, 1]"]
+    outputMeter["LevelMeter<br/>pico L/R + RMS"]
+    output["Salida float estéreo"]
+    parameters[("ProcessingParameters<br/>AtomicReference")]
+
+    subgraph compressorStage["Compresor"]
+        direction LR
+        detector --> envelope --> curve --> smoother --> compGain
+    end
+
+    subgraph limiterStage["Limitador con lookahead"]
+        direction LR
+        delay --> peak --> limiterGain --> wet
+    end
+
+    subgraph outputStage["Mezcla y seguridad final"]
+        direction LR
+        bypass --> finalGain --> clamp --> outputMeter --> output
+    end
+
+    input --> inputMeter --> detector
+    compGain --> delay
+    wet --> bypass
+    input -."ruta seca".-> bypass
+    parameters -.-> curve
+    parameters -.-> envelope
+    parameters -.-> smoother
+    parameters -.-> delay
+    parameters -.-> limiterGain
+    parameters -.-> bypass
+    parameters -.-> finalGain
+
+    classDef signal fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef analysis fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef dynamics fill:#cffafe,stroke:#0891b2,color:#083344
+    classDef config fill:#fef3c7,stroke:#d97706,color:#451a03
+    class input,wet,output signal
+    class inputMeter,detector,peak,outputMeter analysis
+    class envelope,curve,smoother,compGain,delay,limiterGain,bypass,finalGain,clamp dynamics
+    class parameters config

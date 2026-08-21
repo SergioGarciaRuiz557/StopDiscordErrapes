@@ -1,0 +1,130 @@
+classDiagram
+    class DiscordAudioGuardApplication {
+        -ApplicationController controller
+        -MainViewController viewController
+        +start(Stage)
+        -showIntroduction()
+        -restoreWindow(Stage, WindowConfiguration)
+        +main(String[])
+    }
+
+    class ApplicationController {
+        -ConfigurationRepository configurationRepository
+        -JavaSoundAudioBackend backend
+        -DynamicsProcessor processor
+        -AudioEngine engine
+        +refreshDevices()
+        +start(input, output)
+        +stop()
+        +updateParameters(parameters)
+        +metricsSnapshot() Snapshot
+        +close()
+    }
+
+    class AudioEngine {
+        -AudioBackend backend
+        -AudioProcessor processor
+        -AudioMetrics metrics
+        +start(input, output)
+        +stop()
+        -runAudio(input, output)
+        -captureAudio(...)
+        +state() AudioEngineState
+        +close()
+    }
+
+    class AudioBackend {
+        <<interface>>
+        +scanDevices(format)
+        +openInput(device, format, blocks)
+        +openOutput(device, format, blocks)
+    }
+
+    class JavaSoundAudioBackend {
+        -AudioDeviceScanner scanner
+        +scanDevices(format)
+        +openInput(...)
+        +openOutput(...)
+    }
+
+    class AudioProcessor {
+        <<interface>>
+        +process(input, output, frames, metrics)
+        +updateParameters(parameters)
+        +latencyFrames() int
+        +reset()
+    }
+
+    class DynamicsProcessor {
+        -Compressor compressor
+        -PeakLimiter limiter
+        -AtomicReference pendingParameters
+        +process(...)
+        +updateParameters(...)
+        +latencyFrames() int
+        +reset()
+    }
+
+    class AudioPipeline {
+        -AudioFormatConfiguration format
+        -AudioProcessor processor
+        +process(inputBytes, outputBytes, byteCount)
+    }
+
+    class AdaptivePcmBuffer {
+        -short[] left
+        -short[] right
+        -double readPhase
+        -double playbackRate
+        +putPcm16LittleEndian(...)
+        +readPcm16LittleEndian(...)
+        +awaitFrames(...)
+        +close()
+    }
+
+    class ApplicationConfiguration {
+        <<record>>
+        +defaults() ApplicationConfiguration
+        +withDevices(...)
+        +withProcessing(...)
+        +withWindow(...)
+    }
+
+    class ConfigurationRepository {
+        <<interface>>
+        +load() ApplicationConfiguration
+        +save(configuration)
+    }
+
+    class JsonConfigurationRepository {
+        +load() ApplicationConfiguration
+        +save(configuration)
+    }
+
+    class MainViewController
+    class MainView
+    class AudioMetrics
+    class ProcessingParameters
+    class Compressor
+    class PeakLimiter
+
+    DiscordAudioGuardApplication --> ApplicationController
+    DiscordAudioGuardApplication --> MainViewController
+    MainViewController --> MainView
+    MainViewController --> ApplicationController
+    ApplicationController --> AudioEngine
+    ApplicationController --> DynamicsProcessor
+    ApplicationController --> ConfigurationRepository
+    ApplicationController --> ApplicationConfiguration
+    JavaSoundAudioBackend ..|> AudioBackend
+    JsonConfigurationRepository ..|> ConfigurationRepository
+    DynamicsProcessor ..|> AudioProcessor
+    AudioEngine --> AudioBackend
+    AudioEngine --> AudioProcessor
+    AudioEngine --> AudioPipeline
+    AudioEngine --> AdaptivePcmBuffer
+    AudioEngine --> AudioMetrics
+    AudioPipeline --> AudioProcessor
+    DynamicsProcessor --> Compressor
+    DynamicsProcessor --> PeakLimiter
+    DynamicsProcessor --> ProcessingParameters

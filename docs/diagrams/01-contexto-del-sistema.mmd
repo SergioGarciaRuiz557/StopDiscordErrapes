@@ -1,0 +1,26 @@
+flowchart LR
+    person["Usuario"]
+    discord["Discord<br/>mezcla de voz"]
+    cableIn["VB-CABLE<br/>CABLE Input"]
+    cableOut["VB-CABLE<br/>CABLE Output"]
+    guard["Discord Audio Guard<br/>captura + DSP + sincronización"]
+    physical["Dispositivo físico<br/>auriculares / DAC"]
+    ears["Escucha"]
+    config[("config.json")]
+    logs[("logs rotatorios")]
+
+    person -->|"selecciona dispositivos y parámetros"| guard
+    discord -->|"salida configurada"| cableIn
+    cableIn -->|"driver virtual"| cableOut
+    cableOut -->|"PCM 48 kHz / 16-bit / estéreo"| guard
+    guard -->|"PCM procesado"| physical
+    physical --> ears
+    guard <-->|"carga / guarda"| config
+    guard -->|"INFO, WARN, ERROR"| logs
+
+    classDef external fill:#eef2ff,stroke:#4f46e5,color:#111827
+    classDef app fill:#cffafe,stroke:#0891b2,color:#082f49
+    classDef store fill:#fef3c7,stroke:#d97706,color:#451a03
+    class discord,cableIn,cableOut,physical external
+    class guard app
+    class config,logs store

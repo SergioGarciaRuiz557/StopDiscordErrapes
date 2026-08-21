@@ -184,3 +184,7 @@ Detén inmediatamente el motor y revisa el grafo. Los auriculares deben ser la s
 4. Medición de latencia física por loopback y modo de diagnóstico.
 5. Presets, bandeja del sistema y perfiles, manteniendo el DSP independiente.
 6. Limitador *true peak* opcional con sobremuestreo.
+
+## Descargar el instalador
+
+[Descargar Discord Audio Guard 0.1.1 para Windows (.exe)](https://github.com/SergioGarciaRuiz557/StopDiscordErrapes/releases/download/v0.1.1/DiscordAudioGuard-0.1.1.exe)

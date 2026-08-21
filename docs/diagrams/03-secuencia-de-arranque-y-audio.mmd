@@ -1,0 +1,48 @@
+sequenceDiagram
+    autonumber
+    actor U as Usuario
+    participant UI as MainViewController
+    participant AC as ApplicationController
+    participant AE as AudioEngine
+    participant BE as JavaSoundAudioBackend
+    participant IN as TargetDataLine
+    participant CAP as Hilo captura
+    participant AB as AdaptivePcmBuffer
+    participant OUT as SourceDataLine
+
+    U->>UI: Pulsa “Iniciar procesamiento”
+    UI->>AC: start(entrada, salida)
+    AC->>AC: valida y guarda IDs
+    AC->>AE: start(entrada, salida)
+    AE->>AE: STOPPED/ERROR → STARTING
+    AE-->>UI: publica “Abriendo dispositivos”
+    AE->>BE: openInput(...)
+    BE-->>AE: AudioInput
+    AE->>BE: openOutput(...)
+    BE-->>AE: AudioOutput
+    AE->>IN: start()
+    AE->>CAP: inicia hilo daemon
+
+    loop Captura y DSP
+        CAP->>IN: read(bloque PCM)
+        IN-->>CAP: bytes PCM
+        CAP->>CAP: decode → DSP → encode
+        CAP->>AB: putPcm16LittleEndian(...)
+    end
+
+    AE->>AB: awaitFrames(reserva inicial)
+    AB-->>AE: reserva preparada
+    loop Precarga de dispositivo
+        AE->>AB: readPcm16LittleEndian(...)
+        AB-->>AE: bloque adaptado
+        AE->>OUT: write(bloque) antes de start
+    end
+    AE->>OUT: start()
+    AE->>AE: STARTING → RUNNING
+    AE-->>UI: publica “Procesamiento activo”
+
+    loop Reproducción
+        AE->>AB: readPcm16LittleEndian(...)
+        AB-->>AE: bloque con corrección de reloj
+        AE->>OUT: write(bloque PCM)
+    end
