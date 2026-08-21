@@ -18,8 +18,10 @@ class AudioEngineTest {
         AudioEngine engine = new AudioEngine(backend, AudioFormatConfiguration.DEFAULT, processor, metrics, 4);
         engine.start(device("input"), device("output"));
         assertThat(backend.writes.await(2, TimeUnit.SECONDS)).isTrue();
+        awaitRunning(engine);
         assertThat(engine.state()).isEqualTo(AudioEngineState.RUNNING);
         assertThat(processor.blocks).isGreaterThan(0);
+        assertThat(backend.output.writesBeforeStart).isGreaterThanOrEqualTo(1);
         engine.stop();
         awaitStopped(engine);
         assertThat(backend.input.closed).isTrue(); assertThat(backend.output.closed).isTrue();
@@ -44,6 +46,10 @@ class AudioEngineTest {
         while (engine.state() != AudioEngineState.STOPPED && System.nanoTime() < deadline) Thread.sleep(5);
         assertThat(engine.state()).isEqualTo(AudioEngineState.STOPPED);
     }
+    private static void awaitRunning(AudioEngine engine) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (engine.state() == AudioEngineState.STARTING && System.nanoTime() < deadline) Thread.sleep(5);
+    }
 
     private static final class FakeBackend implements AudioBackend {
         final FakeInput input = new FakeInput(); final FakeOutput output = new FakeOutput();
@@ -65,9 +71,14 @@ class AudioEngineTest {
         @Override public void close() { closed = true; }
     }
     private static final class FakeOutput implements AudioOutput {
-        final CountDownLatch writes = new CountDownLatch(1); volatile boolean closed;
-        @Override public void start() {}
-        @Override public int write(byte[] buffer, int offset, int length) { writes.countDown(); return closed ? 0 : length; }
+        final CountDownLatch writes = new CountDownLatch(1); volatile boolean closed; volatile boolean started;
+        volatile int writesBeforeStart;
+        @Override public void start() { started = true; }
+        @Override public int write(byte[] buffer, int offset, int length) {
+            if (!started) writesBeforeStart++;
+            writes.countDown();
+            return closed ? 0 : length;
+        }
         @Override public void stop() {}
         @Override public int bufferSizeBytes() { return 4096; }
         @Override public void close() { closed = true; }
