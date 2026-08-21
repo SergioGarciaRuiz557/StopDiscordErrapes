@@ -5,7 +5,10 @@ import com.discordaudioguard.ui.*;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.image.Image;
 import javafx.stage.Stage;
+
+import java.util.Objects;
 
 public final class DiscordAudioGuardApplication extends Application {
     private ApplicationController controller;
@@ -18,6 +21,8 @@ public final class DiscordAudioGuardApplication extends Application {
         viewController = new MainViewController(controller, view);
         Scene scene = new Scene(view, 1080, 760);
         scene.getStylesheets().add(getClass().getResource("/com/discordaudioguard/ui/application.css").toExternalForm());
+        stage.getIcons().add(new Image(Objects.requireNonNull(
+                getClass().getResource("/com/discordaudioguard/ui/app-icon.png")).toExternalForm()));
         stage.setTitle("Discord Audio Guard"); stage.setScene(scene); stage.setMinWidth(850); stage.setMinHeight(650);
         restoreWindow(stage, controller.configuration().window());
         stage.setOnCloseRequest(event -> {
