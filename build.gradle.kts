@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.discordaudioguard"
-version = "0.1.0"
+version = "0.1.1"
 
 repositories {
     mavenCentral()
@@ -58,6 +58,7 @@ jlink {
         imageName = "DiscordAudioGuard"
         appVersion = project.version.toString()
         installerType = "exe"
+        imageOptions = listOf("--icon", file("src/main/resources/icons/DiscordAudioGuard.ico").absolutePath)
         installerOptions = listOf("--win-menu", "--win-shortcut", "--vendor", "Discord Audio Guard")
     }
 }
