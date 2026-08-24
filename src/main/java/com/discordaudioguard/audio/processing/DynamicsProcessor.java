@@ -7,19 +7,46 @@ import com.discordaudioguard.util.MathUtils;
 
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Allocation-free processing chain for a fixed maximum block size. */
+/**
+ * Dynamics DSP chain with no per-block allocations and click-free bypass.
+ *
+ * <p>The order is input metering, compressor, limiter, dry/wet bypass fade, final
+ * maximum gain, safety clamp, and output metering. The wet buffer is allocated for the
+ * maximum size at construction.</p>
+ *
+ * <p>The UI publishes an immutable object through {@link #pendingParameters}. The audio
+ * thread adopts it at the beginning of a block and updates components without locks.
+ * Bypass interpolates over 5 ms so toggling it does not introduce an audible discontinuity.</p>
+ */
 public final class DynamicsProcessor implements AudioProcessor {
+    /** Duration of the fade between processed and direct audio. */
     private static final double BYPASS_FADE_MS = 5.0;
+    /** First stage: gradual dynamics control. */
     private final Compressor compressor;
+    /** Second stage: absolute peak protection. */
     private final PeakLimiter limiter;
+    /** Meter before DSP. */
     private final LevelMeter inputMeter = new LevelMeter();
+    /** Meter after DSP and final gain. */
     private final LevelMeter outputMeter = new LevelMeter();
+    /** Lock-free mailbox for parameters sent from another thread. */
     private final AtomicReference<ProcessingParameters> pendingParameters;
+    /** Preallocated intermediate wet result. */
     private final float[] wetBuffer;
+    /** Per-frame mix increment that completes the fade in 5 ms. */
     private final double bypassStep;
+    /** Parameters currently applied by the DSP thread. */
     private ProcessingParameters activeParameters;
+    /** Current processed proportion between zero (dry) and one (wet). */
     private double wetMix;
 
+    /**
+     * Creates every stage and allocates the maximum workspace.
+     *
+     * @param sampleRate sample rate in Hz
+     * @param maximumBlockFrames maximum capacity of each call
+     * @param parameters complete initial parameters
+     */
     public DynamicsProcessor(double sampleRate, int maximumBlockFrames, ProcessingParameters parameters) {
         activeParameters = parameters.validated();
         pendingParameters = new AtomicReference<>(activeParameters);
@@ -30,6 +57,7 @@ public final class DynamicsProcessor implements AudioProcessor {
         wetMix = parameters.bypass() ? 0.0 : 1.0;
     }
 
+    /** {@inheritDoc} */
     @Override
     public void process(float[] input, float[] output, int frames, AudioMetrics metrics) {
         applyPendingParameters();
@@ -50,6 +78,7 @@ public final class DynamicsProcessor implements AudioProcessor {
         metrics.publishLevels(inputMeter, outputMeter, compressor.reductionDb(), limiter.reductionDb());
     }
 
+    /** Adopts the latest UI-published configuration once per block. */
     private void applyPendingParameters() {
         ProcessingParameters next = pendingParameters.get();
         if (next == activeParameters) return;
@@ -58,7 +87,12 @@ public final class DynamicsProcessor implements AudioProcessor {
         limiter.setSettings(next.limiter());
     }
 
+    /** {@inheritDoc} */
     @Override public void updateParameters(ProcessingParameters parameters) { pendingParameters.set(parameters.validated()); }
+
+    /** The limiter lookahead is the only source of algorithmic latency. */
     @Override public int latencyFrames() { return limiter.latencyFrames(); }
+
+    /** Clears dynamic state while preserving selected parameters. */
     @Override public void reset() { compressor.reset(); limiter.reset(); }
 }

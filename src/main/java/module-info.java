@@ -1,3 +1,12 @@
+/**
+ * Desktop application that captures a PCM signal, controls its volume variations,
+ * and plays it through a different device in real time.
+ *
+ * <p>The module exports its layers to support tests, diagnostic tools, and potential
+ * alternative clients. Packages reconstructed from JSON by Jackson are opened
+ * selectively, while the application layer is opened to JavaFX so the framework can
+ * manage its lifecycle.</p>
+ */
 module com.discordaudioguard {
     requires java.desktop;
     requires javafx.controls;

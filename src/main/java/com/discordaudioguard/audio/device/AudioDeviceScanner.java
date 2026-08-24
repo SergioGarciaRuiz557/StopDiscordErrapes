@@ -10,9 +10,28 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Enumerator of Java Sound mixers and their relevant capabilities.
+ *
+ * <p>A faulty driver must not hide other devices: each mixer is inspected in isolation,
+ * and runtime exceptions are logged before scanning continues. The result excludes
+ * mixers without usable input or output lines.</p>
+ */
 public final class AudioDeviceScanner {
+    /** Log for devices that could not be inspected. */
     private static final Logger LOGGER = LoggerFactory.getLogger(AudioDeviceScanner.class);
 
+    /** Creates a stateless enumerator; every scan queries the system again. */
+    public AudioDeviceScanner() {
+        // Do not retain mixers because they may appear or disappear between scans.
+    }
+
+    /**
+     * Captures a snapshot of available mixers and tests the specified format.
+     *
+     * @param configuration format whose compatibility is checked
+     * @return immutable descriptor list in system enumeration order
+     */
     public List<AudioDeviceDescriptor> scan(AudioFormatConfiguration configuration) {
         AudioFormat format = configuration.toJavaSoundFormat();
         DataLine.Info inputInfo = new DataLine.Info(TargetDataLine.class, format);
@@ -25,6 +44,7 @@ public final class AudioDeviceScanner {
                 boolean output = mixer.getSourceLineInfo().length > 0;
                 if (!input && !output) continue;
                 boolean formatSupported = (input && mixer.isLineSupported(inputInfo)) || (output && mixer.isLineSupported(outputInfo));
+                // Null separators avoid ambiguity when concatenating variable metadata.
                 String key = info.getName() + '\u0000' + info.getVendor() + '\u0000' + info.getDescription();
                 devices.add(new AudioDeviceDescriptor(
                         UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString(),

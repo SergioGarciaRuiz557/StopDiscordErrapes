@@ -7,17 +7,37 @@ import javafx.scene.layout.*;
 
 import java.util.function.Consumer;
 
+/**
+ * Visual editor for all compression and protection parameters.
+ *
+ * <p>Every user change reconstructs a complete immutable {@link ProcessingParameters}.
+ * {@code loading} distinguishes a programmatic update from an edit: restoring or
+ * loading values moves many controls, but the consumer does not receive a sequence of
+ * inconsistent partial states.</p>
+ */
 public final class DynamicsControlsView extends VBox {
+    /** Switches for both DSP stages and the global direct path. */
     private final CheckBox compressorEnabled = new CheckBox("Compresor activado");
     private final CheckBox limiterEnabled = new CheckBox("Limitador activado");
     private final CheckBox bypass = new CheckBox("Bypass completo");
+    /** Main compressor threshold, ratio, and attack controls. */
     private final Slider threshold = slider(-60, 0), ratio = slider(1, 20), attack = slider(0.1, 100);
+    /** Compressor release, knee, and makeup-gain controls. */
     private final Slider compressorRelease = slider(20, 2000), knee = slider(0, 24), makeup = slider(-12, 12);
+    /** Limiter ceiling, lookahead, and release controls. */
     private final Slider ceiling = slider(-20, -0.1), lookahead = slider(0, 20), limiterRelease = slider(20, 1000);
+    /** Final attenuation shared by dry and wet paths. */
     private final Slider maximumOutput = slider(-30, 0);
+    /** Replaceable consumer that safely discards events by default. */
     private Consumer<ProcessingParameters> listener = ignored -> {};
+    /** Guard that suppresses events while multiple controls are loaded. */
     private boolean loading;
 
+    /**
+     * Builds and populates the panel with a consistent configuration.
+     *
+     * @param initial parameters to display initially
+     */
     public DynamicsControlsView(ProcessingParameters initial) {
         getStyleClass().add("section"); setSpacing(10);
         Label title = new Label("Dinámica y protección"); title.getStyleClass().add("section-title");
@@ -43,6 +63,7 @@ public final class DynamicsControlsView extends VBox {
         setParameters(initial);
     }
 
+    /** Connects every editable property to one publication mechanism. */
     private void installListeners() {
         ChangeListener<Object> changed = (observable, oldValue, newValue) -> publish();
         compressorEnabled.selectedProperty().addListener(changed); limiterEnabled.selectedProperty().addListener(changed);
@@ -51,9 +72,21 @@ public final class DynamicsControlsView extends VBox {
                 ceiling, lookahead, limiterRelease, maximumOutput}) control.valueProperty().addListener(changed);
     }
 
+    /** Publishes a snapshot only when the change originates from the user. */
     private void publish() { if (!loading) listener.accept(parameters()); }
+
+    /**
+     * Installs the destination for editing events.
+     *
+     * @param value consumer receiving complete parameters after every edit
+     */
     public void setOnParametersChanged(Consumer<ProcessingParameters> value) { listener = value; }
 
+    /**
+     * Reconstructs the immutable model from visible values.
+     *
+     * @return complete parameters already validated by their constructors
+     */
     public ProcessingParameters parameters() {
         return new ProcessingParameters(
                 new ProcessingParameters.CompressorSettings(compressorEnabled.isSelected(), threshold.getValue(),
@@ -62,6 +95,11 @@ public final class DynamicsControlsView extends VBox {
                         lookahead.getValue(), limiterRelease.getValue()), bypass.isSelected(), maximumOutput.getValue());
     }
 
+    /**
+     * Loads every control without firing the listener for intermediate states.
+     *
+     * @param value parameters to display
+     */
     public void setParameters(ProcessingParameters value) {
         loading = true;
         compressorEnabled.setSelected(value.compressor().enabled()); threshold.setValue(value.compressor().thresholdDb());
@@ -74,7 +112,10 @@ public final class DynamicsControlsView extends VBox {
         loading = false;
     }
 
+    /** Creates an expandable slider with bounds matching the validated model. */
     private static Slider slider(double min, double max) { Slider value = new Slider(min, max, min); value.setMaxWidth(Double.MAX_VALUE); return value; }
+
+    /** Adds a label, slider, and bound numeric reading to a grid. */
     private static void addControl(GridPane grid, int row, int column, String text, Slider slider) {
         Label label = new Label(text); Label value = new Label(); value.setMinWidth(58);
         value.textProperty().bind(slider.valueProperty().asString("%.1f"));
