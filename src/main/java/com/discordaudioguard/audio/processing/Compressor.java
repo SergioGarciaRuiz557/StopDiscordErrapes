@@ -2,14 +2,32 @@ package com.discordaudioguard.audio.processing;
 
 import com.discordaudioguard.util.DecibelUtils;
 
-/** Stereo-linked feed-forward compressor with a soft-knee transfer curve. */
+/**
+ * Stereo-linked feed-forward compressor with a soft-knee transfer curve.
+ *
+ * <p>The detector takes the greatest L/R magnitude so exactly the same gain is applied
+ * to both channels, preserving the stereo image. It first follows the envelope,
+ * calculates static reduction from threshold, ratio, and knee, then smooths the
+ * resulting gain. Makeup gain is added after reduction.</p>
+ */
 public final class Compressor {
+    /** Stream sample rate used by the temporal followers. */
     private final double sampleRate;
+    /** Smoothed detector of maximum stereo amplitude. */
     private final EnvelopeFollower envelope;
+    /** Smoother for calculated attenuation. */
     private final GainSmoother gainSmoother;
+    /** Settings effective for the next processed sample. */
     private ProcessingParameters.CompressorSettings settings;
+    /** Reduction observed at the end of the latest block, expressed as positive dB. */
     private double reductionDb;
 
+    /**
+     * Creates the compressor and its state followers.
+     *
+     * @param sampleRate sample rate in Hz
+     * @param settings initial validated configuration
+     */
     public Compressor(double sampleRate, ProcessingParameters.CompressorSettings settings) {
         this.sampleRate = sampleRate;
         this.settings = settings;
@@ -17,6 +35,11 @@ public final class Compressor {
         this.gainSmoother = new GainSmoother(sampleRate, settings.attackMs(), settings.releaseMs());
     }
 
+    /**
+     * Replaces controls and recomputes timing without resetting dynamic state.
+     *
+     * @param value new validated configuration
+     */
     public void setSettings(ProcessingParameters.CompressorSettings value) {
         if (value.equals(settings)) return;
         settings = value;
@@ -24,6 +47,13 @@ public final class Compressor {
         gainSmoother.configure(value.attackMs(), value.releaseMs());
     }
 
+    /**
+     * Compresses a stereo region from {@code input} into {@code output}.
+     *
+     * @param input normalized L/R samples
+     * @param output independent destination with sufficient capacity
+     * @param frames stereo pairs to process
+     */
     public void process(float[] input, float[] output, int frames) {
         double lastReduction = 0.0;
         for (int frame = 0, sample = 0; frame < frames; frame++, sample += 2) {
@@ -40,6 +70,17 @@ public final class Compressor {
         reductionDb = lastReduction;
     }
 
+    /**
+     * Evaluates the static compression curve without attack or release.
+     *
+     * <p>Outside the knee, levels below threshold remain unchanged and higher levels
+     * retain only {@code over/ratio}. Inside the knee, a quadratic transition avoids
+     * an abrupt slope change.</p>
+     *
+     * @param inputDb detected level in dBFS
+     * @param settings threshold, ratio, and knee width
+     * @return required reduction as a positive dB amount
+     */
     public static double calculateReductionDb(double inputDb, ProcessingParameters.CompressorSettings settings) {
         double over = inputDb - settings.thresholdDb();
         double knee = settings.kneeDb();
@@ -53,6 +94,13 @@ public final class Compressor {
         return over - over / settings.ratio();
     }
 
+    /**
+     * Returns the most recent attenuation.
+     *
+     * @return reduction at the end of the latest block, in positive dB
+     */
     public double reductionDb() { return reductionDb; }
+
+    /** Clears detector and gain memory before starting a new stream. */
     public void reset() { envelope.reset(); gainSmoother.reset(); reductionDb = 0.0; }
 }

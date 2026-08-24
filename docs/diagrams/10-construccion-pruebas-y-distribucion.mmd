@@ -1,0 +1,28 @@
+flowchart LR
+    source["Código Java + recursos"]
+    compile["compileJava<br/>Java 21 modular"]
+    tests["test<br/>JUnit 5 + AssertJ"]
+    jar["jar modular"]
+    jlink["jlink<br/>runtime Java reducido"]
+    portable["jpackageImage<br/>carpeta portable + .exe"]
+    wix["WiX Toolset"]
+    installer["jpackage<br/>instalador .exe"]
+    installed["Aplicación instalada<br/>menú Inicio + acceso directo"]
+    icon["PNG + ICO personalizados"]
+    dependencies["Maven Central<br/>JavaFX, Jackson, SLF4J"]
+
+    source --> compile --> tests
+    compile --> jar --> jlink --> portable
+    portable --> installer --> installed
+    wix --> installer
+    icon --> source
+    dependencies --> compile
+
+    classDef sourceStyle fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef buildStyle fill:#cffafe,stroke:#0891b2,color:#083344
+    classDef validationStyle fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef outputStyle fill:#fef3c7,stroke:#d97706,color:#451a03
+    class source,icon,dependencies sourceStyle
+    class compile,jar,jlink,wix buildStyle
+    class tests validationStyle
+    class portable,installer,installed outputStyle

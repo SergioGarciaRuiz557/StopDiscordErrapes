@@ -6,7 +6,9 @@ import com.discordaudioguard.util.DecibelUtils;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.*;
 
+/** Integration tests for the compressor-limiter-bypass chain and its metrics. */
 class DynamicsProcessorTest {
+    /** Exercises silence and continuous phase across several consecutive blocks. */
     @Test void processesSilenceSineAndConsecutiveBlocks() {
         DynamicsProcessor processor = new DynamicsProcessor(48_000, 256, ProcessingParameters.DEFAULT);
         AudioMetrics metrics = new AudioMetrics(); float[] input = new float[512]; float[] output = new float[512];
@@ -16,6 +18,7 @@ class DynamicsProcessorTest {
         }
         assertThat(metrics.snapshot().outputRmsDb()).isGreaterThan(-40);
     }
+    /** Demonstrates that a sustained full-scale signal never exceeds the ceiling. */
     @Test void limitsArtificialPeakAndSaturatedSignal() {
         DynamicsProcessor processor = new DynamicsProcessor(48_000, 256, ProcessingParameters.DEFAULT);
         AudioMetrics metrics = new AudioMetrics(); float[] input = new float[512]; float[] output = new float[512];
@@ -25,6 +28,7 @@ class DynamicsProcessorTest {
         }
         assertThat(metrics.snapshot().totalReductionDb()).isGreaterThan(0);
     }
+    /** Checks that the parameter mailbox and bypass fade produce finite values. */
     @Test void acceptsHotParameterAndBypassChanges() {
         DynamicsProcessor processor = new DynamicsProcessor(48_000, 256, ProcessingParameters.DEFAULT);
         AudioMetrics metrics = new AudioMetrics(); float[] input = new float[512]; float[] output = new float[512];

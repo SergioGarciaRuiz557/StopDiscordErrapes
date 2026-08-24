@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    participant FX as Hilo JavaFX
+    participant MAIN as Hilo realtime
+    participant CAP as Hilo captura
+    participant IN as AudioInput
+    participant BUF as AdaptivePcmBuffer
+    participant OUT as AudioOutput
+
+    FX->>MAIN: stop()
+    FX->>FX: estado → STOPPING
+    FX->>IN: stop() + close()
+    FX->>OUT: flush() + stop() + close()
+    FX->>MAIN: interrupt()
+    FX->>CAP: interrupt()
+
+    par Desbloqueo de captura
+        IN--xCAP: read() termina / lanza
+        CAP->>BUF: close()
+    and Desbloqueo de reproducción
+        BUF--xMAIN: await/read termina
+        OUT--xMAIN: write() termina
+    end
+
+    MAIN->>BUF: close()
+    MAIN->>IN: safeStop()
+    MAIN->>CAP: interrupt()
+    MAIN->>CAP: join(hasta 1 s)
+    MAIN->>MAIN: limpia referencias activas
+    MAIN-->>FX: publica STOPPED
+
+    Note over FX,OUT: stopRequested es volatile y el cierre es idempotente

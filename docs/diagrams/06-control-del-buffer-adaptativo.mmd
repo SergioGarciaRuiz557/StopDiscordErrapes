@@ -1,0 +1,31 @@
+flowchart TD
+    producer["Productor<br/>captura + DSP"] --> put["Inserta frames PCM L/R"]
+    put --> occupancy["Mide ocupación actual"]
+    target["Objetivo<br/>≥ 8 bloques"] --> error["error = (ocupación - objetivo) / objetivo"]
+    occupancy --> error
+    error --> rate["ratio = clamp(1 + error × 0,01,<br/>0,995, 1,005)"]
+    available["Datos realmente disponibles"] --> safe["Limita ratio máximo seguro"]
+    rate --> safe
+    phase["Fase fraccional anterior"] --> interpolationNode["Interpola muestra A ↔ B"]
+    safe --> interpolationNode
+    buffer[("Ring buffer<br/>short[] L + short[] R")] --> interpolationNode
+    interpolationNode --> block["Bloque PCM de salida fijo"]
+    block --> consumer["Consumidor<br/>SourceDataLine"]
+    interpolationNode --> update["Actualiza fase, cursor y ocupación"]
+    update --> occupancy
+
+    low{"¿Ocupación baja?"}
+    high{"¿Ocupación alta?"}
+    occupancy --> low
+    occupancy --> high
+    low -->|"sí"| slower["ratio < 1<br/>consume menos frames"]
+    high -->|"sí"| faster["ratio > 1<br/>consume más frames"]
+    slower --> rate
+    faster --> rate
+
+    classDef producerStyle fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef controlStyle fill:#cffafe,stroke:#0891b2,color:#083344
+    classDef stateStyle fill:#fef3c7,stroke:#d97706,color:#451a03
+    class producer,consumer producerStyle
+    class error,rate,safe,interpolationNode,update,slower,faster controlStyle
+    class occupancy,target,available,phase,buffer,low,high stateStyle

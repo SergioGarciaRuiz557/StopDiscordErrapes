@@ -1,0 +1,31 @@
+stateDiagram-v2
+    [*] --> STOPPED
+    STOPPED --> STARTING: start() válido
+    ERROR --> STARTING: reintento start()
+    STARTING --> RUNNING: dispositivos abiertos + precarga completa
+    STARTING --> STOPPING: stop() durante arranque
+    RUNNING --> STOPPING: stop()
+    STARTING --> ERROR: excepción inesperada
+    RUNNING --> ERROR: captura / salida / dispositivo falla
+    STOPPING --> STOPPED: hilos terminados y recursos cerrados
+    RUNNING --> STOPPED: finalización normal
+    ERROR --> [*]: cierre de aplicación
+    STOPPED --> [*]: cierre de aplicación
+
+    note right of STARTING
+        Abre líneas
+        Resetea DSP
+        Llena búfer adaptativo
+        Precarga SourceDataLine
+    end note
+
+    note right of RUNNING
+        Captura y reproducción
+        en hilos separados
+    end note
+
+    note right of STOPPING
+        Marca stopRequested
+        Cierra líneas
+        Interrumpe hilos
+    end note

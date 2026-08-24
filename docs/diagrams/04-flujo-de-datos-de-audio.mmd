@@ -1,0 +1,27 @@
+flowchart LR
+    device["TargetDataLine<br/>bytes PCM16 LE"]
+    read["AudioEngine.readBlock<br/>bloque completo"]
+    decode["Pcm16Decoder<br/>byte[] → float[]"]
+    process["DynamicsProcessor<br/>DSP estéreo"]
+    encode["Pcm16Encoder<br/>float[] → byte[]"]
+    ring["AdaptivePcmBuffer<br/>short L/R circular"]
+    control["Control de ocupación<br/>ratio 0,995–1,005"]
+    interpolation["Interpolación lineal<br/>fase fraccional"]
+    write["AudioEngine.writeBlock<br/>escritura completa"]
+    output["SourceDataLine<br/>auriculares"]
+    metrics["AudioMetrics<br/>niveles, CPU, búfer, ppm"]
+
+    device --> read --> decode --> process --> encode --> ring
+    ring --> control --> interpolation --> write --> output
+    process -."publica niveles y reducción".-> metrics
+    read -."tiempo de proceso".-> metrics
+    control -."búfer y corrección".-> metrics
+
+    classDef bytes fill:#fef3c7,stroke:#d97706,color:#451a03
+    classDef floats fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef sync fill:#cffafe,stroke:#0891b2,color:#083344
+    classDef diag fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    class device,read,encode,write,output bytes
+    class decode,process floats
+    class ring,control,interpolation sync
+    class metrics diag
