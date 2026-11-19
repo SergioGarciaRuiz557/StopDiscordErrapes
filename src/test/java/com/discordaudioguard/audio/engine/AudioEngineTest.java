@@ -24,6 +24,81 @@ import static org.assertj.core.api.Assertions.*;
 class AudioEngineTest {
     @TempDir Path diagnosticsDirectory;
 
+    @Test void restartingOutputKeepsCaptureAndProcessingActive() throws Exception {
+        ReopeningBackend backend = new ReopeningBackend();
+        CopyProcessor processor = new CopyProcessor();
+        Path session;
+        try (AudioEngine engine = new AudioEngine(backend, AudioFormatConfiguration.DEFAULT,
+                processor, new AudioMetrics(), 4, diagnosticsDirectory)) {
+            assertThat(engine.restartOutput()).isFalse();
+            engine.start(device("input"), device("output"), true);
+            AudioDiagnosticsTest.await(() -> engine.state() == AudioEngineState.RUNNING && engine.diagnosticSnapshot().recording());
+            session = engine.diagnosticSnapshot().file();
+            assertThat(engine.markDelay()).isEqualTo(1);
+            assertThat(engine.restartOutput()).isTrue();
+            assertThat(backend.opening.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(engine.restartOutput()).isFalse();
+            backend.allowOpen.countDown();
+            AudioDiagnosticsTest.await(() -> backend.replacement.started && backend.replacement.writes.getCount() == 0);
+            int processed = processor.blocks;
+            AudioDiagnosticsTest.await(() -> processor.blocks > processed);
+            assertThat(backend.output.closed).isTrue();
+            assertThat(backend.replacement.closed).isFalse();
+            assertThat(backend.input.closed).isFalse();
+            assertThat(backend.inputOpens).isOne();
+            assertThat(processor.resets).isOne();
+            assertThat(engine.diagnosticSnapshot().file()).isEqualTo(session);
+            assertThat(engine.markDelay()).isEqualTo(2);
+        }
+        assertThat(backend.replacement.closed).isTrue();
+        assertThat(backend.input.closed).isTrue();
+        assertThat(AudioDiagnosticsTest.rows(session)).extracting(row -> row.get("event"))
+                .containsSubsequence("START", "MARK", "OUTPUT_RESTART_BEGIN", "OUTPUT_RESTARTED", "END");
+    }
+
+    @Test void stopDuringReopenReleasesLateOutput() throws Exception {
+        ReopeningBackend backend = new ReopeningBackend();
+        Path session;
+        try (AudioEngine engine = new AudioEngine(backend, AudioFormatConfiguration.DEFAULT,
+                new CopyProcessor(), new AudioMetrics(), 4, diagnosticsDirectory)) {
+            engine.start(device("input"), device("output"), true);
+            AudioDiagnosticsTest.await(() -> engine.state() == AudioEngineState.RUNNING && engine.diagnosticSnapshot().recording());
+            session = engine.diagnosticSnapshot().file();
+            assertThat(engine.restartOutput()).isTrue();
+            assertThat(backend.opening.await(2, TimeUnit.SECONDS)).isTrue();
+            engine.stop();
+            backend.allowOpen.countDown();
+            awaitStopped(engine);
+            assertThat(backend.replacement.closed).isTrue();
+            assertThat(backend.replacement.started).isFalse();
+            assertThat(backend.input.closed).isTrue();
+            assertThat(engine.restartOutput()).isFalse();
+        }
+        assertThat(AudioDiagnosticsTest.rows(session)).extracting(row -> row.get("event"))
+                .containsSubsequence("OUTPUT_RESTART_BEGIN", "OUTPUT_RESTART_CANCELLED", "END")
+                .doesNotContain("OUTPUT_RESTARTED");
+    }
+
+    @Test void failedOutputReopenReleasesCaptureAndReportsError() throws Exception {
+        ReopeningBackend backend = new ReopeningBackend();
+        backend.failOpen = true;
+        backend.allowOpen.countDown();
+        Path session;
+        try (AudioEngine engine = new AudioEngine(backend, AudioFormatConfiguration.DEFAULT,
+                new CopyProcessor(), new AudioMetrics(), 4, diagnosticsDirectory)) {
+            engine.start(device("input"), device("output"), true);
+            AudioDiagnosticsTest.await(() -> engine.state() == AudioEngineState.RUNNING && engine.diagnosticSnapshot().recording());
+            session = engine.diagnosticSnapshot().file();
+            assertThat(engine.restartOutput()).isTrue();
+            AudioDiagnosticsTest.await(() -> engine.state() == AudioEngineState.ERROR && backend.input.closed);
+            assertThat(backend.output.closed).isTrue();
+            assertThat(engine.restartOutput()).isFalse();
+        }
+        assertThat(AudioDiagnosticsTest.rows(session)).extracting(row -> row.get("event"))
+                .containsSubsequence("OUTPUT_RESTART_BEGIN", "OUTPUT_RESTART_FAILED", "END")
+                .doesNotContain("OUTPUT_RESTARTED");
+    }
+
     @Test void diagnosticSessionsSurviveStopRestartAndCloseWithoutLosingMarks() throws Exception {
         FakeBackend backend = new FakeBackend();
         AudioEngine engine = new AudioEngine(backend, AudioFormatConfiguration.DEFAULT, new CopyProcessor(),
@@ -101,7 +176,7 @@ class AudioEngineTest {
     }
 
     /** Deterministic backend that always returns the same simulated endpoint pair. */
-    private static final class FakeBackend implements AudioBackend {
+    private static class FakeBackend implements AudioBackend {
         /** Shared endpoints whose state can be observed by the test. */
         final FakeInput input = new FakeInput(); final FakeOutput output = new FakeOutput();
         /** Signal released by the first write. */
@@ -109,6 +184,32 @@ class AudioEngineTest {
         @Override public List<AudioDeviceDescriptor> scanDevices(AudioFormatConfiguration format) { return List.of(); }
         @Override public AudioInput openInput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) { input.closed = false; return input; }
         @Override public AudioOutput openOutput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) { output.closed = false; output.started = false; return output; }
+    }
+    /** A driver can return a newly opened line even after cancellation was requested. */
+    private static final class ReopeningBackend extends FakeBackend {
+        final FakeOutput replacement = new FakeOutput();
+        final CountDownLatch opening = new CountDownLatch(1);
+        final CountDownLatch allowOpen = new CountDownLatch(1);
+        volatile int inputOpens;
+        int outputOpens;
+        boolean failOpen;
+
+        @Override public AudioInput openInput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) {
+            inputOpens++;
+            return super.openInput(device, format, bufferBlocks);
+        }
+
+        @Override public AudioOutput openOutput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) {
+            if (outputOpens++ == 0) return super.openOutput(device, format, bufferBlocks);
+            opening.countDown();
+            try {
+                if (!allowOpen.await(3, TimeUnit.SECONDS)) throw new IllegalStateException("Timed out waiting for reopen");
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            }
+            if (failOpen) throw new IllegalStateException("Salida ocupada");
+            return replacement;
+        }
     }
     /** Infinite silent input that ends when closed by the engine. */
     private static final class FakeInput implements AudioInput {
@@ -144,11 +245,12 @@ class AudioEngineTest {
     private static final class CopyProcessor implements AudioProcessor {
         /** Blocks processed since the latest reset. */
         volatile int blocks;
+        volatile int resets;
         @Override public void process(float[] input, float[] output, int frames, AudioMetrics metrics) {
             System.arraycopy(input, 0, output, 0, frames * 2); blocks++;
         }
         @Override public void updateParameters(ProcessingParameters parameters) {}
         @Override public int latencyFrames() { return 0; }
-        @Override public void reset() { blocks = 0; }
+        @Override public void reset() { blocks = 0; resets++; }
     }
 }

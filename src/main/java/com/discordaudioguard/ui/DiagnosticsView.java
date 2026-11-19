@@ -14,6 +14,7 @@ import java.nio.file.Path;
 public final class DiagnosticsView extends VBox {
     private final CheckBox enabled = new CheckBox("Guardar diagnóstico de latencia");
     private final Button mark = new Button("Marcar retraso");
+    private final Button restartOutput = new Button("Reiniciar solo la salida");
     private final Button openFolder = new Button("Abrir registros");
     private final Label queues = new Label("Las mediciones aparecerán al iniciar el procesamiento.");
     private final Label status = new Label("Se guardará un archivo por cada inicio del procesamiento.");
@@ -24,24 +25,26 @@ public final class DiagnosticsView extends VBox {
     public DiagnosticsView() {
         getStyleClass().add("section"); setSpacing(7);
         Label title = new Label("Diagnóstico de latencia"); title.getStyleClass().add("section-title");
-        enabled.setSelected(true); mark.setDisable(true);
-        Label help = new Label("Al notar retraso, pulsa «Marcar retraso» antes de detener. " +
-                "Se guardan métricas y nombres de dispositivos, sin grabar conversaciones.");
+        enabled.setSelected(true); mark.setDisable(true); restartOutput.setDisable(true);
+        Label help = new Label("Si notas retraso, márcalo y pulsa «Reiniciar solo la salida». " +
+                "Oirás un breve corte mientras la entrada sigue abierta. El registro guarda métricas, sin grabar conversaciones.");
         Label limits = new Label("La estimación incluye las colas visibles y el lookahead; " +
                 "no mide la latencia completa hasta los auriculares.");
         for (Label label : new Label[]{help, limits, queues, status, file}) label.setWrapText(true);
-        FlowPane actions = new FlowPane(12, 8, enabled, mark, openFolder);
+        FlowPane actions = new FlowPane(12, 8, enabled, mark, restartOutput, openFolder);
         getChildren().addAll(title, actions, help, queues, limits, status, file);
     }
 
     public boolean isEnabled() { return enabled.isSelected(); }
     public Button markButton() { return mark; }
+    public Button restartOutputButton() { return restartOutput; }
     public Button openFolderButton() { return openFolder; }
     public void markerRequested(int number) { requestedMarker = number; }
 
-    public void update(AudioDiagnostics.Snapshot value, AudioEngineState state) {
+    public void update(AudioDiagnostics.Snapshot value, AudioEngineState state, boolean restartingOutput) {
         boolean active = state != AudioEngineState.STOPPED && state != AudioEngineState.ERROR;
         enabled.setDisable(active);
+        restartOutput.setDisable(state != AudioEngineState.RUNNING || restartingOutput);
         if (!java.util.Objects.equals(currentFile, value.file())) {
             currentFile = value.file(); requestedMarker = 0;
         }

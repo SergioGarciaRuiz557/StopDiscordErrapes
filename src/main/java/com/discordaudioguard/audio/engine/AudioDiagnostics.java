@@ -17,14 +17,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
- * Optional, per-stream diagnostic recorder. All device polling, formatting, allocation
- * and file access happens on a normal-priority monitor, never on an audio thread.
+ * Optional, per-stream diagnostic recorder. Device polling, formatting and file
+ * access happen on a normal-priority monitor. Audio threads enqueue restart events.
  * Samples are approximate: hidden driver queues and in-flight blocks are not included.
  * Files contain numeric telemetry and device names, never PCM or recorded speech.
  */
@@ -49,7 +49,7 @@ public final class AudioDiagnostics {
     private final AudioTimingProbe.Snapshot[] latest = new AudioTimingProbe.Snapshot[5];
     private final AudioFormatConfiguration format;
     private final AudioInput input;
-    private final AudioOutput output;
+    private final Supplier<AudioOutput> currentOutput;
     private final AdaptivePcmBuffer buffer;
     private final AudioMetrics metrics;
     private final Supplier<AudioEngineState> engineState;
@@ -57,24 +57,27 @@ public final class AudioDiagnostics {
     private final String context;
     private final long startedNanos = System.nanoTime();
     private final Instant startedAt = Instant.now();
-    private final ArrayBlockingQueue<Marker> markers = new ArrayBlockingQueue<>(32);
+    private final ConcurrentLinkedQueue<Event> events = new ConcurrentLinkedQueue<>();
     private final CountDownLatch wake = new CountDownLatch(1);
     private final CountDownLatch finished = new CountDownLatch(1);
     private final Window window = new Window();
     private volatile String endReason;
     private volatile Snapshot snapshot;
     private int markerCount;
+    // Even revisions identify active lines; an odd revision means an output restart is in progress.
+    private volatile int outputRevision;
+    private int sampledOutputRevision = -1;
     private long samplingErrors, writtenBytes, inputPosition = -1, outputPosition = -1;
     private long previousSampleNanos;
     private double maxSampleGapMillis;
     private final long initialBlocks, initialWriteErrors;
 
     AudioDiagnostics(Path directory, AudioFormatConfiguration format, AudioInput input,
-                     AudioOutput output, AdaptivePcmBuffer buffer, AudioMetrics metrics,
+                     Supplier<AudioOutput> currentOutput, AdaptivePcmBuffer buffer, AudioMetrics metrics,
                      Supplier<AudioEngineState> engineState, String context) {
         this.format = format;
         this.input = input;
-        this.output = output;
+        this.currentOutput = currentOutput;
         this.buffer = buffer;
         this.metrics = metrics;
         this.engineState = engineState;
@@ -103,9 +106,16 @@ public final class AudioDiagnostics {
     public synchronized int markDelay() {
         if (!snapshot.recording() || endReason != null) return -1;
         int next = markerCount + 1;
-        if (!markers.offer(new Marker(Instant.now(), elapsedMillis(), next))) return -1;
+        if (markerCount - snapshot.savedMarkers() >= 32) return -1;
+        events.add(new Event("MARK", Instant.now(), elapsedMillis(), next, "User noticed delay"));
         markerCount = next;
         return next;
+    }
+
+    synchronized void outputRestartEvent(String event) {
+        if (endReason != null || finished.getCount() == 0) return;
+        if (event.equals("OUTPUT_RESTART_BEGIN") || event.equals("OUTPUT_RESTARTED")) outputRevision++;
+        events.add(new Event(event, Instant.now(), elapsedMillis(), 0, ""));
     }
 
     /** Nonblocking shutdown request, safe to call on an audio thread. */
@@ -134,12 +144,13 @@ public final class AudioDiagnostics {
                 writeEvent(writer, "START", startedAt, 0, "", context +
                         "; sample_ms=100; summary_ms=1000; UTC timestamps; blank=unavailable; " +
                         "queue maxima are sampled; timing maxima are cumulative; " +
-                        "visible_plus_dsp excludes hidden queues and in-flight blocks; schema=1");
+                        "visible_plus_dsp excludes hidden queues and in-flight blocks; " +
+                        "output_frame_position is local to output_position_generation; schema=2");
                 writer.flush();
                 long nextSummary = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
                 while (endReason == null) {
                     sample();
-                    drainMarkers(writer);
+                    drainEvents(writer);
                     long now = System.nanoTime();
                     if (now >= nextSummary) {
                         writeSummary(writer, "SAMPLE", "");
@@ -147,7 +158,7 @@ public final class AudioDiagnostics {
                         nextSummary = now + TimeUnit.SECONDS.toNanos(1);
                         if (writtenBytes >= MAX_FILE_BYTES) {
                             finish("LIMIT");
-                            drainMarkers(writer);
+                            drainEvents(writer);
                             writeSummary(writer, "LIMIT", "Recording stopped at 100 MiB; audio continues");
                             publishStatus("Límite de 100 MiB alcanzado; registro detenido", false);
                             return;
@@ -156,7 +167,7 @@ public final class AudioDiagnostics {
                     wake.await(SAMPLE_MILLIS, TimeUnit.MILLISECONDS);
                 }
                 // No device calls after stop: retain the last sample and flush pending marks.
-                drainMarkers(writer);
+                drainEvents(writer);
                 writeSummary(writer, "END", endReason);
                 writer.flush();
                 publishStatus("Registro guardado", false);
@@ -180,12 +191,26 @@ public final class AudioDiagnostics {
         double inputMillis = Double.NaN, outputMillis = Double.NaN;
         try { inputMillis = queueMillis(input.queuedBytes(), input.bufferSizeBytes(), format); }
         catch (RuntimeException ignored) { samplingErrors++; }
-        try { outputMillis = queueMillis(output.queuedBytes(), output.bufferSizeBytes(), format); }
-        catch (RuntimeException ignored) { samplingErrors++; }
         try { inputPosition = input.framePosition(); }
         catch (RuntimeException ignored) { inputPosition = -1; samplingErrors++; }
-        try { outputPosition = output.framePosition(); }
-        catch (RuntimeException ignored) { outputPosition = -1; samplingErrors++; }
+        int revision = outputRevision;
+        AudioOutput output = currentOutput.get();
+        outputPosition = -1;
+        sampledOutputRevision = -1;
+        if ((revision & 1) == 0 && output != null) {
+            int outputErrors = 0;
+            try { outputMillis = queueMillis(output.queuedBytes(), output.bufferSizeBytes(), format); }
+            catch (RuntimeException ignored) { outputErrors++; }
+            try { outputPosition = output.framePosition(); }
+            catch (RuntimeException ignored) { outputErrors++; }
+            if (revision == outputRevision && output == currentOutput.get()) {
+                sampledOutputRevision = revision;
+                samplingErrors += outputErrors;
+            } else {
+                outputMillis = Double.NaN;
+                outputPosition = -1;
+            }
+        }
         double adaptiveMillis = buffer.bufferedFrames() * 1_000.0 / format.sampleRate();
         double visible = inputMillis + adaptiveMillis + outputMillis;
         double lookahead = metrics.lookaheadMillis();
@@ -205,14 +230,15 @@ public final class AudioDiagnostics {
         return bytes * 1_000.0 / (format.bytesPerFrame() * (double) format.sampleRate());
     }
 
-    private void drainMarkers(BufferedWriter writer) throws IOException {
-        Marker marker;
-        while ((marker = markers.poll()) != null) {
-            writeEvent(writer, "MARK", marker.at(), marker.elapsedMillis(),
-                    Integer.toString(marker.number()), "User noticed delay");
+    private void drainEvents(BufferedWriter writer) throws IOException {
+        Event event;
+        while ((event = events.poll()) != null) {
+            writeEvent(writer, event.type(), event.at(), event.elapsedMillis(),
+                    event.marker() == 0 ? "" : Integer.toString(event.marker()), event.note());
             writer.flush();
+            if (event.marker() == 0) continue;
             Snapshot last = snapshot;
-            snapshot = new Snapshot(last.status(), file, last.recording(), last.elapsedMillis(), marker.number(),
+            snapshot = new Snapshot(last.status(), file, last.recording(), last.elapsedMillis(), event.marker(),
                     last.inputMillis(), last.adaptiveMillis(), last.outputMillis(), last.visiblePlusDspMillis(),
                     last.sampleNanos());
         }
@@ -229,7 +255,8 @@ public final class AudioDiagnostics {
             values.add(number(window.maximum(i)));
         }
         values.add(number(window.samples == 0 ? Double.NaN : window.saturated * 100.0 / window.samples));
-        values.add(position(inputPosition)); values.add(position(outputPosition));
+        boolean currentPosition = sampledOutputRevision >= 0 && sampledOutputRevision == outputRevision;
+        values.add(position(inputPosition)); values.add(currentPosition ? position(outputPosition) : "");
         AudioMetrics.Snapshot m = metrics.snapshot();
         values.add(Long.toString(m.blocksProcessed() - initialBlocks));
         values.add(Long.toString(m.writeErrors() - initialWriteErrors));
@@ -246,6 +273,7 @@ public final class AudioDiagnostics {
             values.add(number(current.activeNanos() / 1_000_000.0));
             previous[i] = current;
         }
+        values.add(currentPosition ? Integer.toString(1 + sampledOutputRevision / 2) : "");
         values.add(note);
         writeLine(writer, values);
         window.clear();
@@ -280,6 +308,7 @@ public final class AudioDiagnostics {
             fields.addAll(List.of(name + "_operations_total", name + "_units_total", name + "_mean_ms",
                     name + "_max_session_ms", name + "_inflight_ms"));
         }
+        fields.add("output_position_generation");
         fields.add("note");
         return fields;
     }
@@ -307,7 +336,7 @@ public final class AudioDiagnostics {
     private double elapsedMillis() { return (System.nanoTime() - startedNanos) / 1_000_000.0; }
     private static String number(double value) { return Double.isFinite(value) ? String.format(Locale.ROOT, "%.4f", value) : ""; }
     private static String position(long value) { return value < 0 ? "" : Long.toString(value); }
-    private record Marker(Instant at, double elapsedMillis, int number) {}
+    private record Event(String type, Instant at, double elapsedMillis, int marker, String note) {}
 
     /** Values are read together by the UI. sampleNanos allows it to flag a stale monitor. */
     public record Snapshot(String status, Path file, boolean recording, double elapsedMillis, int savedMarkers,

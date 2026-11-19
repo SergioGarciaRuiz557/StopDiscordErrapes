@@ -123,6 +123,8 @@ public final class ApplicationController implements AutoCloseable {
 
     public AudioDiagnostics.Snapshot diagnosticSnapshot() { return engine.diagnosticSnapshot(); }
     public int markDelay() { return engine.markDelay(); }
+    public boolean restartOutput() { return engine.restartOutput(); }
+    public boolean outputRestartPending() { return engine.outputRestartPending(); }
 
     /**
      * Returns the in-memory preferences.

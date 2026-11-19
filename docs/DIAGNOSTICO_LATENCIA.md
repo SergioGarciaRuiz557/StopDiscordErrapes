@@ -1,13 +1,13 @@
-# Diagnóstico de latencia — versión 0.1.2
+# Diagnóstico de latencia — versión 0.1.3
 
 ## Cómo realizar la prueba
 
-1. Cierra la aplicación anterior e instala la versión 0.1.2. Comprueba el número en la cabecera.
+1. Cierra la aplicación anterior e instala la versión 0.1.3. Comprueba el número en la cabecera.
 2. Mantén activada **Guardar diagnóstico de latencia** y pulsa **Iniciar procesamiento**.
 3. Comprueba que el panel indica **Registrando**. Usa Discord normalmente hasta que notes el retraso.
-4. Pulsa **Marcar retraso**. Espera a que aparezca **Marcas guardadas: 1** (o el número siguiente).
-5. Pulsa **Detener**. El panel indicará **Registro guardado**. Inicia otra vez y deja funcionar la aplicación uno o dos minutos para disponer de una referencia tras la recuperación.
-6. Detén el procesamiento y pulsa **Abrir registros**. Comparte los dos CSV correspondientes, el de la sesión con retraso y el de la sesión posterior. No es necesario abrirlos ni modificarlos con Excel.
+4. Mientras se oye el retraso, pulsa **Marcar retraso** y después **Reiniciar solo la salida**. Oirás un corte mientras la aplicación reabre el mismo dispositivo de reproducción. La línea de captura sigue abierta.
+5. Escucha si el retraso desaparece tras el corte. Si continúa, puedes pulsar **Detener** e **Iniciar procesamiento** para comparar con un reinicio completo.
+6. En **Abrir registros** encontrarás el CSV de la sesión marcada. Comparte ese archivo e indica qué oíste después de reabrir la salida. La marca y el resultado de la reapertura están en el mismo archivo.
 
 Los archivos se guardan en `%USERPROFILE%\.discord-audio-guard\diagnostics`. El nombre empieza por `audio-`, contiene la fecha/hora **UTC** del inicio y un identificador único. Cada inicio crea un archivo; no sobrescribe sesiones anteriores. El registro también se cierra al salir normalmente de la aplicación. Ante un cierre forzado se conserva lo que se haya volcado, normalmente hasta el último segundo; puede faltar `END`.
 
@@ -37,7 +37,9 @@ CSV UTF-8, separador coma, campos entre comillas y punto decimal independiente d
 
 | Campo o grupo | Significado |
 |---|---|
-| `event` | `START`, `SAMPLE`, `MARK`, `END` o `LIMIT` |
+| `event` | `START`, `SAMPLE`, `MARK`, `END`, `LIMIT` o un evento de reinicio de salida |
+| Eventos de salida | `OUTPUT_RESTART_BEGIN` indica el comienzo de la reapertura. `OUTPUT_RESTARTED` indica que la salida arrancó. `OUTPUT_RESTART_FAILED` y `OUTPUT_RESTART_CANCELLED` indican fallo o cancelación. |
+| `output_position_generation` | Identifica cada apertura de la salida. Compara posiciones de reproducción solo dentro de la misma apertura. Las medias de la ventana que contiene el reinicio pueden incluir muestras de ambos lados. |
 | `utc`, `elapsed_ms` | Hora UTC y tiempo monotónico desde el inicio del diagnóstico |
 | `marker` | Número de marca; su hora es la del clic, aunque la escritura sea posterior |
 | `engine_state` | Estado al escribir la fila; el evento `END` y su nota determinan el final de la sesión |

@@ -10,7 +10,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -90,7 +92,41 @@ class AudioDiagnosticsTest {
         assertThat(Files.readString(regularFile)).isEqualTo("existing");
     }
 
+    @Test void restartKeepsSameLogAndTracksOnlyTheReplacementLineAfterReopening() throws Exception {
+        AtomicReference<AudioOutput> output = new AtomicReference<>(new FakeOutput());
+        AudioDiagnostics session = session(new FakeInput(), output::get, directory);
+        session.start();
+        try {
+            await(() -> session.snapshot().recording());
+            assertThat(session.markDelay()).isEqualTo(1);
+            session.outputRestartEvent("OUTPUT_RESTART_BEGIN");
+            output.set(null);
+            await(() -> Double.isNaN(session.snapshot().outputMillis()));
+            FakeOutput replacement = new FakeOutput();
+            replacement.queued = 960;
+            replacement.position = 15;
+            output.set(replacement);
+            session.outputRestartEvent("OUTPUT_RESTARTED");
+            await(() -> session.snapshot().outputMillis() == 5);
+        } finally {
+            session.finish("STOP");
+            assertThat(session.awaitFinished(3000)).isTrue();
+        }
+        List<Map<String, String>> rows = rows(session.snapshot().file());
+        assertThat(rows.stream().map(row -> row.get("event")))
+                .containsSubsequence("START", "MARK", "OUTPUT_RESTART_BEGIN", "OUTPUT_RESTARTED", "END");
+        assertThat(rows.getLast()).containsEntry("output_frame_position", "15")
+                .containsEntry("output_position_generation", "2")
+                .containsEntry("input_frame_position", "123456")
+                .containsEntry("sampling_errors_total", "0");
+        assertThat(session.snapshot().savedMarkers()).isEqualTo(1);
+    }
+
     private AudioDiagnostics session(FakeInput input, FakeOutput output, Path path) throws Exception {
+        return session(input, () -> output, path);
+    }
+
+    private AudioDiagnostics session(FakeInput input, Supplier<AudioOutput> output, Path path) throws Exception {
         AdaptivePcmBuffer buffer = new AdaptivePcmBuffer(3456);
         buffer.putPcm16LittleEndian(new byte[4096], 4096);
         AudioMetrics metrics = new AudioMetrics(); metrics.setLookaheadMillis(5);
@@ -144,8 +180,9 @@ class AudioDiagnosticsTest {
 
     private static final class FakeOutput implements AudioOutput {
         int queued = 5760;
+        long position = 120000;
         public int queuedBytes() { return queued; }
-        public long framePosition() { return 120000; }
+        public long framePosition() { return position; }
         public int bufferSizeBytes() { return 6144; }
         public int write(byte[] b, int o, int n) { throw new AssertionError("Monitor must not write PCM"); }
         public void start() {} public void stop() {} public void close() {}

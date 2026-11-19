@@ -60,6 +60,8 @@ public final class AudioEngine implements AutoCloseable {
     private volatile AudioInput activeInput;
     /** Active output, published so {@link #stop()} can unblock it. */
     private volatile AudioOutput activeOutput;
+    /** Serviced by the playback thread between blocks, also guarding duplicate UI requests. */
+    private volatile boolean outputRestartPending;
     /** Latest session is retained after stop so the UI can show its saved file. */
     private volatile AudioDiagnostics diagnostics;
     private final Path diagnosticsDirectory;
@@ -124,23 +126,25 @@ public final class AudioEngine implements AutoCloseable {
      * Any failure not caused by a requested stop is translated into the ERROR state.
      */
     private void runAudio(AudioDeviceDescriptor inputDevice, AudioDeviceDescriptor outputDevice, boolean diagnosticsEnabled) {
-        try (AudioInput input = backend.openInput(inputDevice, format, bufferBlocks);
-             AudioOutput output = backend.openOutput(outputDevice, format, bufferBlocks)) {
-            activeInput = input; activeOutput = output;
+        Throwable failure = null;
+        try (AudioInput input = backend.openInput(inputDevice, format, bufferBlocks)) {
+            activeInput = input;
+            if (stopRequested) return;
+            AudioOutput output = backend.openOutput(outputDevice, format, bufferBlocks);
+            activeOutput = output;
             if (stopRequested) return;
             processor.reset();
             metrics.setLookaheadMillis(processor.latencyFrames() * 1_000.0 / format.sampleRate());
             // Match preloading to the capacity actually granted by the driver.
-            int outputBufferBlocks = Math.max(1, output.bufferSizeBytes() / format.blockBytes());
-            int prefillBlocks = Math.max(1, Math.min(MAXIMUM_DEVICE_PREFILL_BLOCKS, outputBufferBlocks - 1));
+            int prefillBlocks = prefillBlocks(output);
             int targetBufferBlocks = Math.max(MINIMUM_ADAPTIVE_BUFFER_BLOCKS, bufferBlocks * 2);
             // Extra margin keeps a brief consumer pause from immediately blocking capture.
             int capacityBlocks = targetBufferBlocks + prefillBlocks + 8;
             int targetBufferFrames = targetBufferBlocks * format.blockFrames();
             AdaptivePcmBuffer adaptiveBuffer = new AdaptivePcmBuffer(capacityBlocks * format.blockFrames());
             AudioDiagnostics session = diagnosticsEnabled ? new AudioDiagnostics(diagnosticsDirectory,
-                    format, input, output, adaptiveBuffer, metrics, this::state,
-                    "app=0.1.2; input=" + inputDevice.name() + "; output=" + outputDevice.name() +
+                    format, input, () -> activeOutput, adaptiveBuffer, metrics, this::state,
+                    "app=0.1.3; input=" + inputDevice.name() + "; output=" + outputDevice.name() +
                     "; sample_rate=" + format.sampleRate() + "; frame_bytes=" + format.bytesPerFrame() +
                     "; block_frames=" + format.blockFrames() + "; target_frames=" + targetBufferFrames +
                     "; ring_capacity_frames=" + capacityBlocks * format.blockFrames() +
@@ -165,47 +169,120 @@ public final class AudioEngine implements AutoCloseable {
                 }
                 // SourceDataLine accepts data before start(): reserves are loaded into
                 // both the device and adaptive buffer before its clock is activated.
-                for (int i = 0; i < prefillBlocks && !stopRequested; i++) {
-                    int length = readPlaybackBlock(adaptiveBuffer, playbackBuffer, targetBufferFrames, captureFailure, session);
-                    if (length < 0) break;
-                    if (writeBlock(output, playbackBuffer, length, session) < length) metrics.incrementWriteErrors();
-                }
+                prefillAndStart(output, prefillBlocks, adaptiveBuffer, playbackBuffer, targetBufferFrames, captureFailure, session);
                 if (stopRequested) return;
-                output.start();
                 double bufferLatency = (targetBufferBlocks + prefillBlocks) * format.blockDurationMillis();
                 metrics.setEstimatedLatencyMillis(bufferLatency + processor.latencyFrames() * 1_000.0 / format.sampleRate());
                 LOGGER.info("Audio iniciado: entrada={}, salida={}, bloque={} frames, búfer adaptativo={} bloques, precarga={} bloques, buffers de dispositivo={}/{} bytes",
                         inputDevice.name(), outputDevice.name(), format.blockFrames(), targetBufferBlocks, prefillBlocks,
                         input.bufferSizeBytes(), output.bufferSizeBytes());
-                state.set(AudioEngineState.RUNNING);
-                publish(AudioEngineState.RUNNING, "Procesamiento de audio activo");
+                synchronized (this) {
+                    if (stopRequested) return;
+                    state.set(AudioEngineState.RUNNING);
+                    publish(AudioEngineState.RUNNING, "Procesamiento de audio activo");
+                }
 
                 while (!stopRequested && !Thread.currentThread().isInterrupted()) {
+                    if (outputRestartPending) {
+                        output = reopenOutput(outputDevice, adaptiveBuffer, playbackBuffer,
+                                targetBufferFrames, captureFailure, session);
+                        if (output == null) break;
+                    }
                     int length = readPlaybackBlock(adaptiveBuffer, playbackBuffer, targetBufferFrames, captureFailure, session);
                     if (length < 0) break;
                     if (writeBlock(output, playbackBuffer, length, session) < length) metrics.incrementWriteErrors();
                 }
             } finally {
-                if (session != null) session.finish(stopRequested ? "STOP" : "ERROR");
+                if (session != null) {
+                    if (outputRestartPending) session.outputRestartEvent(
+                            stopRequested ? "OUTPUT_RESTART_CANCELLED" : "OUTPUT_RESTART_FAILED");
+                    session.finish(stopRequested ? "STOP" : "ERROR");
+                }
                 adaptiveBuffer.close();
                 safeStop(input);
                 capture.interrupt();
                 joinCapture(capture);
             }
         } catch (Throwable exception) {
-            if (!stopRequested) {
-                LOGGER.error("El motor de audio se detuvo inesperadamente", exception);
-                state.set(AudioEngineState.ERROR);
-                publish(AudioEngineState.ERROR, "El motor se ha detenido inesperadamente: " + userMessage(exception));
-            }
+            failure = exception;
         } finally {
-            activeInput = null; activeOutput = null; captureWorker = null;
-            if (state.get() != AudioEngineState.ERROR) {
-                state.set(AudioEngineState.STOPPED);
-                publish(AudioEngineState.STOPPED, "Procesamiento detenido");
+            safeStop(detachOutput());
+            synchronized (this) {
+                activeInput = null;
+                captureWorker = null;
+                outputRestartPending = false;
+                if (failure != null && !stopRequested) {
+                    LOGGER.error("El motor de audio se detuvo inesperadamente", failure);
+                    state.set(AudioEngineState.ERROR);
+                    publish(AudioEngineState.ERROR, "El motor se ha detenido inesperadamente: " + userMessage(failure));
+                } else {
+                    state.set(AudioEngineState.STOPPED);
+                    publish(AudioEngineState.STOPPED, "Procesamiento detenido");
+                }
             }
         }
     }
+
+    private int prefillBlocks(AudioOutput output) {
+        int blocks = output.bufferSizeBytes() / format.blockBytes();
+        return Math.max(1, Math.min(MAXIMUM_DEVICE_PREFILL_BLOCKS, blocks - 1));
+    }
+
+    /** Called only between writes by the owner of playback. A concurrent Stop wins. */
+    private AudioOutput reopenOutput(AudioDeviceDescriptor device, AdaptivePcmBuffer buffer,
+                                     byte[] playback, int targetFrames, AtomicReference<Throwable> captureFailure,
+                                     AudioDiagnostics session) throws InterruptedException {
+        if (session != null) session.outputRestartEvent("OUTPUT_RESTART_BEGIN");
+        try {
+            AudioOutput previous = detachOutput();
+            if (previous != null) {
+                try (previous) { previous.stop(); }
+            }
+            if (stopRequested) return null;
+            AudioOutput replacement = backend.openOutput(device, format, bufferBlocks);
+            activeOutput = replacement;
+            if (stopRequested) return null;
+            prefillAndStart(replacement, prefillBlocks(replacement), buffer, playback, targetFrames, captureFailure, session);
+            synchronized (this) {
+                if (stopRequested) return null;
+                if (session != null) session.outputRestartEvent("OUTPUT_RESTARTED");
+                outputRestartPending = false;
+                publish(AudioEngineState.RUNNING, "Salida reiniciada. La entrada sigue abierta.");
+            }
+            return replacement;
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException("No se pudo reiniciar la salida " + device.name()
+                    + ": " + userMessage(exception), exception);
+        }
+    }
+
+    private void prefillAndStart(AudioOutput output, int blocks, AdaptivePcmBuffer buffer,
+                                 byte[] playback, int targetFrames, AtomicReference<Throwable> captureFailure,
+                                 AudioDiagnostics session) throws InterruptedException {
+        for (int i = 0; i < blocks && !stopRequested; i++) {
+            int length = readPlaybackBlock(buffer, playback, targetFrames, captureFailure, session);
+            if (length < 0) return;
+            if (writeBlock(output, playback, length, session) < length) metrics.incrementWriteErrors();
+        }
+        if (!stopRequested) output.start();
+    }
+
+    /** Transfers close ownership to Stop or the playback worker exactly once. */
+    private synchronized AudioOutput detachOutput() {
+        AudioOutput output = activeOutput;
+        activeOutput = null;
+        return output;
+    }
+
+    /** Queues an output-only reopen on the playback worker. Capture and DSP keep their state. */
+    public synchronized boolean restartOutput() {
+        if (state.get() != AudioEngineState.RUNNING || outputRestartPending) return false;
+        outputRestartPending = true;
+        publish(AudioEngineState.RUNNING, "Reiniciando solo la salida…");
+        return true;
+    }
+
+    public boolean outputRestartPending() { return outputRestartPending; }
 
     /**
      * Producer loop: completes input blocks, runs DSP, and queues the results.
@@ -336,11 +413,11 @@ public final class AudioEngine implements AutoCloseable {
      */
     public synchronized void stop() {
         AudioEngineState current = state.get();
-        if (current == AudioEngineState.STOPPED || current == AudioEngineState.STOPPING) return;
+        if (current == AudioEngineState.STOPPED || current == AudioEngineState.ERROR || current == AudioEngineState.STOPPING) return;
         stopRequested = true;
         state.set(AudioEngineState.STOPPING);
         publish(AudioEngineState.STOPPING, "Cerrando dispositivos…");
-        safeStop(activeInput); safeStop(activeOutput);
+        safeStop(activeInput); safeStop(detachOutput());
         Thread thread = worker;
         if (thread != null) thread.interrupt();
         Thread capture = captureWorker;
@@ -351,7 +428,11 @@ public final class AudioEngine implements AutoCloseable {
     private static void safeStop(AudioInput input) { if (input != null) try { input.stop(); input.close(); } catch (RuntimeException ignored) {} }
 
     /** Stops and closes an output during cleanup, ignoring secondary failures. */
-    private static void safeStop(AudioOutput output) { if (output != null) try { output.stop(); output.close(); } catch (RuntimeException ignored) {} }
+    private static void safeStop(AudioOutput output) {
+        if (output == null) return;
+        try { output.stop(); } catch (RuntimeException ignored) {}
+        try { output.close(); } catch (RuntimeException ignored) {}
+    }
 
     /**
      * Returns the current lifecycle state.

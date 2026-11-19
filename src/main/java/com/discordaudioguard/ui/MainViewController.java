@@ -35,6 +35,9 @@ public final class MainViewController implements AutoCloseable {
         view.devices().refreshButton().setOnAction(event -> refreshDevices());
         view.startButton().setOnAction(event -> start());
         view.stopButton().setOnAction(event -> controller.stop());
+        view.diagnostics().restartOutputButton().setOnAction(event -> {
+            if (controller.restartOutput()) view.diagnostics().restartOutputButton().setDisable(true);
+        });
         view.diagnostics().markButton().setOnAction(event -> {
             int number = controller.markDelay();
             if (number > 0) view.diagnostics().markerRequested(number);
@@ -55,7 +58,8 @@ public final class MainViewController implements AutoCloseable {
             @Override public void handle(long now) {
                 if (now - lastUpdate >= UI_INTERVAL_NANOS) {
                     view.meters().update(controller.metricsSnapshot());
-                    view.diagnostics().update(controller.diagnosticSnapshot(), controller.state().engineState());
+                    view.diagnostics().update(controller.diagnosticSnapshot(), controller.state().engineState(),
+                            controller.outputRestartPending());
                     lastUpdate = now;
                 }
             }

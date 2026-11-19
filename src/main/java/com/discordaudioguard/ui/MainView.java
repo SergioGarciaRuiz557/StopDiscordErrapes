@@ -36,7 +36,7 @@ public final class MainView extends BorderPane {
      */
     public MainView(ProcessingParameters initial) {
         dynamics = new DynamicsControlsView(initial);
-        Label title = new Label("Discord Audio Guard 0.1.2"); title.getStyleClass().add("title");
+        Label title = new Label("Discord Audio Guard 0.1.3"); title.getStyleClass().add("title");
         Label subtitle = new Label("Protección en tiempo real frente a picos de volumen en Discord");
         VBox header = new VBox(3, title, subtitle); header.setPadding(new Insets(16, 18, 10, 18));
         HBox actions = new HBox(10, start, stop, reset); stop.setDisable(true);
