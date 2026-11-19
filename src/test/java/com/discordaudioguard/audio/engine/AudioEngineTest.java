@@ -5,6 +5,9 @@ import com.discordaudioguard.audio.device.AudioDeviceDescriptor;
 import com.discordaudioguard.audio.format.AudioFormatConfiguration;
 import com.discordaudioguard.audio.processing.ProcessingParameters;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Path;
+import java.nio.file.Files;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -19,6 +22,41 @@ import static org.assertj.core.api.Assertions.*;
  * processing, closure, and rejection of illegal transitions.</p>
  */
 class AudioEngineTest {
+    @TempDir Path diagnosticsDirectory;
+
+    @Test void diagnosticSessionsSurviveStopRestartAndCloseWithoutLosingMarks() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        AudioEngine engine = new AudioEngine(backend, AudioFormatConfiguration.DEFAULT, new CopyProcessor(),
+                new AudioMetrics(), 4, diagnosticsDirectory);
+        try {
+            engine.start(device("input"), device("output"), true);
+            AudioDiagnosticsTest.await(() -> engine.state() == AudioEngineState.RUNNING && engine.diagnosticSnapshot().recording());
+            Path first = engine.diagnosticSnapshot().file();
+            assertThat(engine.markDelay()).isEqualTo(1);
+            engine.stop(); awaitStopped(engine);
+            AudioDiagnosticsTest.await(() -> !engine.diagnosticSnapshot().recording());
+            assertThat(Files.readString(first)).contains("\"MARK\"", "\"END\"", "\"STOP\"");
+            engine.start(device("input"), device("output"), true);
+            AudioDiagnosticsTest.await(() -> engine.state() == AudioEngineState.RUNNING && engine.diagnosticSnapshot().recording());
+            Path second = engine.diagnosticSnapshot().file();
+            assertThat(second).isNotEqualTo(first);
+            assertThat(engine.diagnosticSnapshot().savedMarkers()).isZero();
+            engine.close();
+            assertThat(Files.readString(second)).contains("\"START\"", "\"END\"");
+        } finally { engine.close(); }
+    }
+
+    @Test void diagnosticsFailureDoesNotStopAudio() throws Exception {
+        Path regularFile = diagnosticsDirectory.resolve("file"); Files.writeString(regularFile, "keep");
+        AudioEngine engine = new AudioEngine(new FakeBackend(), AudioFormatConfiguration.DEFAULT,
+                new CopyProcessor(), new AudioMetrics(), 4, regularFile);
+        try {
+            engine.start(device("input"), device("output"), true);
+            AudioDiagnosticsTest.await(() -> engine.diagnosticSnapshot().status().contains("No se pudo guardar"));
+            awaitRunning(engine);
+            assertThat(engine.state()).isEqualTo(AudioEngineState.RUNNING);
+        } finally { engine.close(); }
+    }
     /** Exercises the full stream and verifies pre-start preloading and final release. */
     @Test void streamsThroughSimulatedDevicesAndClosesThem() throws Exception {
         FakeBackend backend = new FakeBackend(); AudioMetrics metrics = new AudioMetrics(); CopyProcessor processor = new CopyProcessor();
@@ -69,8 +107,8 @@ class AudioEngineTest {
         /** Signal released by the first write. */
         final CountDownLatch writes = output.writes;
         @Override public List<AudioDeviceDescriptor> scanDevices(AudioFormatConfiguration format) { return List.of(); }
-        @Override public AudioInput openInput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) { return input; }
-        @Override public AudioOutput openOutput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) { return output; }
+        @Override public AudioInput openInput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) { input.closed = false; return input; }
+        @Override public AudioOutput openOutput(AudioDeviceDescriptor device, AudioFormatConfiguration format, int bufferBlocks) { output.closed = false; output.started = false; return output; }
     }
     /** Infinite silent input that ends when closed by the engine. */
     private static final class FakeInput implements AudioInput {

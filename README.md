@@ -122,7 +122,13 @@ tools/             generador de señales de desarrollo
 
 La captura y la reproducción usan hilos separados y un búfer PCM adaptativo para absorber el *jitter* de Windows y de Java Sound. Como VB-CABLE y la salida física tienen relojes independientes, el lector ajusta suavemente su velocidad en un margen máximo de ±0,5 % mediante interpolación lineal, manteniendo estable la reserva sin descartar bloques ni insertar silencios. Antes de arrancar los auriculares, el motor precarga tanto el búfer adaptativo como el del dispositivo. Ambos hilos reutilizan buffers de bytes y `float`, no usan streams ni colecciones dinámicas y no acceden a JavaFX, disco o red. Los parámetros se publican con una referencia atómica y se aplican al comienzo de un bloque; la interfaz crea snapshots fuera de los hilos críticos.
 
-La latencia mostrada es una **estimación teórica** basada en tamaños de buffer reportados por Java Sound y el lookahead. No es una medición física extremo a extremo. La latencia real depende de Java Sound, los controladores, Windows, VB-CABLE y el dispositivo físico.
+La **referencia inicial teórica** se calcula al arrancar a partir de las reservas y el lookahead. El panel de diagnóstico muestra además una estimación dinámica del audio pendiente en las colas visibles y el lookahead. Ninguna de ellas es una medición física extremo a extremo: hay colas y retardos de Windows, VB-CABLE y el dispositivo que Java Sound no permite observar.
+
+## Diagnóstico de retraso acumulado (0.1.2)
+
+Deja activada **Guardar diagnóstico de latencia**, inicia el procesamiento y usa la aplicación normalmente. Cuando notes retraso, pulsa **Marcar retraso** y espera a que aumente **Marcas guardadas** antes de detener. Cada inicio genera un CSV independiente en `%USERPROFILE%/.discord-audio-guard/diagnostics`, accesible con **Abrir registros**. Comparte la sesión afectada y una sesión corta posterior al reinicio.
+
+Se consultan las colas cada 100 ms y se guardan resúmenes cada segundo desde un hilo independiente. Se registran métricas y nombres de dispositivos, sin conversaciones. El diagnóstico no modifica el audio ni aplica recuperación automática. Consulta la [guía de pruebas y formato CSV](docs/DIAGNOSTICO_LATENCIA.md).
 
 ## Configuración y logs
 
@@ -319,7 +325,13 @@ tools/             development signal generator
 
 Capture and playback use separate threads and an adaptive PCM buffer to absorb jitter from Windows and Java Sound. Because VB-CABLE and the physical output have independent clocks, the reader gently adjusts its speed by at most ±0.5% through linear interpolation, keeping the reserve stable without dropping blocks or inserting silence. Before starting the headphones, the engine preloads both the adaptive buffer and the device buffer. Both threads reuse byte and `float` buffers, use no streams or dynamic collections, and never access JavaFX, disk, or the network. Parameters are published through an atomic reference and applied at the beginning of a block; the UI creates snapshots outside critical threads.
 
-The displayed latency is a **theoretical estimate** based on buffer sizes reported by Java Sound and the configured lookahead. It is not a physical end-to-end measurement. Actual latency depends on Java Sound, the drivers, Windows, VB-CABLE, and the physical device.
+The **initial theoretical reference** is computed at startup from the reserves and lookahead. The diagnostic panel also displays a dynamic estimate of visible queued audio plus lookahead. Neither measures physical end-to-end latency: Java Sound cannot expose every Windows, VB-CABLE, or hardware queue and delay.
+
+## Diagnosing accumulated delay (0.1.2)
+
+Leave **Guardar diagnóstico de latencia** enabled and start processing. When delay becomes audible, press **Marcar retraso** and wait for the saved-marker count before stopping. Each start creates a separate CSV in `%USERPROFILE%/.discord-audio-guard/diagnostics`; use **Abrir registros** to find it. Share the affected session and a short session after restarting processing.
+
+Visible queues are sampled every 100 ms, with one-second summaries written by a separate normal-priority thread. Files contain numeric metrics and device names, not conversations. Diagnostics do not alter audio or automatically reset the stream. See the [test procedure and CSV reference (Spanish)](docs/DIAGNOSTICO_LATENCIA.md).
 
 ## Configuration and logs
 

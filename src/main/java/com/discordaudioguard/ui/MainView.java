@@ -21,6 +21,7 @@ public final class MainView extends BorderPane {
     private final LevelMeterView meters = new LevelMeterView();
     /** Summary of the engine lifecycle. */
     private final StatusView status = new StatusView();
+    private final DiagnosticsView diagnostics = new DiagnosticsView();
     /** Action that opens devices and starts the stream. */
     private final Button start = new Button("Iniciar procesamiento");
     /** Action that requests stopping the active stream. */
@@ -35,11 +36,11 @@ public final class MainView extends BorderPane {
      */
     public MainView(ProcessingParameters initial) {
         dynamics = new DynamicsControlsView(initial);
-        Label title = new Label("Discord Audio Guard"); title.getStyleClass().add("title");
+        Label title = new Label("Discord Audio Guard 0.1.2"); title.getStyleClass().add("title");
         Label subtitle = new Label("Protección en tiempo real frente a picos de volumen en Discord");
         VBox header = new VBox(3, title, subtitle); header.setPadding(new Insets(16, 18, 10, 18));
         HBox actions = new HBox(10, start, stop, reset); stop.setDisable(true);
-        VBox content = new VBox(12, devices, actions, dynamics, meters, status); content.setPadding(new Insets(8, 18, 18, 18));
+        VBox content = new VBox(12, devices, actions, diagnostics, dynamics, meters, status); content.setPadding(new Insets(8, 18, 18, 18));
         ScrollPane scroll = new ScrollPane(content); scroll.setFitToWidth(true); scroll.setPannable(true);
         setTop(header); setCenter(scroll);
     }
@@ -71,6 +72,8 @@ public final class MainView extends BorderPane {
      * @return status section
      */
     public StatusView status() { return status; }
+
+    public DiagnosticsView diagnostics() { return diagnostics; }
 
     /**
      * Returns the start action.

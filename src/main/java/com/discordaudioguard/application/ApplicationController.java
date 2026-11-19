@@ -87,11 +87,15 @@ public final class ApplicationController implements AutoCloseable {
      * @throws IllegalStateException if the engine is already active or changing state
      */
     public void start(AudioDeviceDescriptor input, AudioDeviceDescriptor output) {
+        start(input, output, true);
+    }
+
+    public void start(AudioDeviceDescriptor input, AudioDeviceDescriptor output, boolean diagnosticsEnabled) {
         if (input == null) throw new IllegalArgumentException("Selecciona un dispositivo de entrada");
         if (output == null) throw new IllegalArgumentException("Selecciona un dispositivo de salida");
         configuration = configuration.withDevices(input.id(), output.id());
         configurationRepository.save(configuration);
-        engine.start(input, output);
+        engine.start(input, output, diagnosticsEnabled);
     }
 
     /** Requests a safe asynchronous engine stop. */
@@ -116,6 +120,9 @@ public final class ApplicationController implements AutoCloseable {
      * @return snapshot of the most recent metrics
      */
     public AudioMetrics.Snapshot metricsSnapshot() { return metrics.snapshot(); }
+
+    public AudioDiagnostics.Snapshot diagnosticSnapshot() { return engine.diagnosticSnapshot(); }
+    public int markDelay() { return engine.markDelay(); }
 
     /**
      * Returns the in-memory preferences.

@@ -30,6 +30,12 @@ public interface AudioOutput extends AutoCloseable {
      */
     int bufferSizeBytes();
 
+    /** Bytes pending in the visible playback queue, or -1 when unsupported. */
+    default int queuedBytes() { return -1; }
+
+    /** Rendered frame position reported by the backend, or -1 when unsupported. */
+    default long framePosition() { return -1; }
+
     /** Releases the line and all associated native resources. */
     @Override void close();
 }

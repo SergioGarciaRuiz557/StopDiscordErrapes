@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
+import java.nio.file.Path;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
@@ -59,6 +60,9 @@ public final class AudioEngine implements AutoCloseable {
     private volatile AudioInput activeInput;
     /** Active output, published so {@link #stop()} can unblock it. */
     private volatile AudioOutput activeOutput;
+    /** Latest session is retained after stop so the UI can show its saved file. */
+    private volatile AudioDiagnostics diagnostics;
+    private final Path diagnosticsDirectory;
 
     /**
      * Creates a stopped engine; no devices are opened until {@link #start}.
@@ -71,8 +75,14 @@ public final class AudioEngine implements AutoCloseable {
      */
     public AudioEngine(AudioBackend backend, AudioFormatConfiguration format, AudioProcessor processor,
                        AudioMetrics metrics, int bufferBlocks) {
+        this(backend, format, processor, metrics, bufferBlocks, AudioDiagnostics.directory());
+    }
+
+    AudioEngine(AudioBackend backend, AudioFormatConfiguration format, AudioProcessor processor,
+                AudioMetrics metrics, int bufferBlocks, Path diagnosticsDirectory) {
         this.backend = Objects.requireNonNull(backend); this.format = format; this.processor = processor;
         this.metrics = metrics; this.bufferBlocks = bufferBlocks;
+        this.diagnosticsDirectory = diagnosticsDirectory;
     }
 
     /**
@@ -88,6 +98,12 @@ public final class AudioEngine implements AutoCloseable {
      * @throws IllegalArgumentException if both descriptors represent the same device
      */
     public synchronized void start(AudioDeviceDescriptor inputDevice, AudioDeviceDescriptor outputDevice) {
+        start(inputDevice, outputDevice, false);
+    }
+
+    /** Starts a stream with optional numeric diagnostics, leaving audio routing unchanged. */
+    public synchronized void start(AudioDeviceDescriptor inputDevice, AudioDeviceDescriptor outputDevice,
+                                   boolean diagnosticsEnabled) {
         if (!state.compareAndSet(AudioEngineState.STOPPED, AudioEngineState.STARTING) &&
                 !state.compareAndSet(AudioEngineState.ERROR, AudioEngineState.STARTING)) {
             throw new IllegalStateException("El motor ya está iniciado o cambiando de estado");
@@ -97,8 +113,9 @@ public final class AudioEngine implements AutoCloseable {
             throw new IllegalArgumentException("La entrada y la salida seleccionadas son el mismo dispositivo. Posible bucle de audio detectado.");
         }
         stopRequested = false;
+        diagnostics = null;
         publish(AudioEngineState.STARTING, "Abriendo dispositivos de audio…");
-        worker = ThreadUtils.daemonThread("discord-audio-guard-realtime", () -> runAudio(inputDevice, outputDevice));
+        worker = ThreadUtils.daemonThread("discord-audio-guard-realtime", () -> runAudio(inputDevice, outputDevice, diagnosticsEnabled));
         worker.start();
     }
 
@@ -106,12 +123,13 @@ public final class AudioEngine implements AutoCloseable {
      * Resource-owning loop: opens lines, creates the buffer, preloads, and plays audio.
      * Any failure not caused by a requested stop is translated into the ERROR state.
      */
-    private void runAudio(AudioDeviceDescriptor inputDevice, AudioDeviceDescriptor outputDevice) {
+    private void runAudio(AudioDeviceDescriptor inputDevice, AudioDeviceDescriptor outputDevice, boolean diagnosticsEnabled) {
         try (AudioInput input = backend.openInput(inputDevice, format, bufferBlocks);
              AudioOutput output = backend.openOutput(outputDevice, format, bufferBlocks)) {
             activeInput = input; activeOutput = output;
             if (stopRequested) return;
             processor.reset();
+            metrics.setLookaheadMillis(processor.latencyFrames() * 1_000.0 / format.sampleRate());
             // Match preloading to the capacity actually granted by the driver.
             int outputBufferBlocks = Math.max(1, output.bufferSizeBytes() / format.blockBytes());
             int prefillBlocks = Math.max(1, Math.min(MAXIMUM_DEVICE_PREFILL_BLOCKS, outputBufferBlocks - 1));
@@ -120,15 +138,27 @@ public final class AudioEngine implements AutoCloseable {
             int capacityBlocks = targetBufferBlocks + prefillBlocks + 8;
             int targetBufferFrames = targetBufferBlocks * format.blockFrames();
             AdaptivePcmBuffer adaptiveBuffer = new AdaptivePcmBuffer(capacityBlocks * format.blockFrames());
+            AudioDiagnostics session = diagnosticsEnabled ? new AudioDiagnostics(diagnosticsDirectory,
+                    format, input, output, adaptiveBuffer, metrics, this::state,
+                    "app=0.1.2; input=" + inputDevice.name() + "; output=" + outputDevice.name() +
+                    "; sample_rate=" + format.sampleRate() + "; frame_bytes=" + format.bytesPerFrame() +
+                    "; block_frames=" + format.blockFrames() + "; target_frames=" + targetBufferFrames +
+                    "; ring_capacity_frames=" + capacityBlocks * format.blockFrames() +
+                    "; prefill_blocks=" + prefillBlocks + "; input_capacity_bytes=" + input.bufferSizeBytes() +
+                    "; output_capacity_bytes=" + output.bufferSizeBytes() +
+                    "; java=" + System.getProperty("java.version") + "; os=" + System.getProperty("os.name") +
+                    "; read/write units=bytes; dsp/put/take units=frames") : null;
+            diagnostics = session;
             AtomicReference<Throwable> captureFailure = new AtomicReference<>();
             AudioPipeline pipeline = new AudioPipeline(format, processor, metrics);
             byte[] playbackBuffer = new byte[format.blockBytes()];
             Thread capture = ThreadUtils.daemonThread("discord-audio-guard-capture",
-                    () -> captureAudio(input, pipeline, adaptiveBuffer, captureFailure));
+                    () -> captureAudio(input, pipeline, adaptiveBuffer, captureFailure, session));
             captureWorker = capture;
-            input.start();
-            capture.start();
             try {
+                if (session != null) session.start();
+                input.start();
+                capture.start();
                 int startupFrames = (targetBufferBlocks + prefillBlocks) * format.blockFrames() + 2;
                 if (!adaptiveBuffer.awaitFrames(startupFrames)) {
                     throwCaptureFailure(captureFailure);
@@ -136,9 +166,9 @@ public final class AudioEngine implements AutoCloseable {
                 // SourceDataLine accepts data before start(): reserves are loaded into
                 // both the device and adaptive buffer before its clock is activated.
                 for (int i = 0; i < prefillBlocks && !stopRequested; i++) {
-                    int length = readPlaybackBlock(adaptiveBuffer, playbackBuffer, targetBufferFrames, captureFailure);
+                    int length = readPlaybackBlock(adaptiveBuffer, playbackBuffer, targetBufferFrames, captureFailure, session);
                     if (length < 0) break;
-                    if (writeBlock(output, playbackBuffer, length) < length) metrics.incrementWriteErrors();
+                    if (writeBlock(output, playbackBuffer, length, session) < length) metrics.incrementWriteErrors();
                 }
                 if (stopRequested) return;
                 output.start();
@@ -151,11 +181,12 @@ public final class AudioEngine implements AutoCloseable {
                 publish(AudioEngineState.RUNNING, "Procesamiento de audio activo");
 
                 while (!stopRequested && !Thread.currentThread().isInterrupted()) {
-                    int length = readPlaybackBlock(adaptiveBuffer, playbackBuffer, targetBufferFrames, captureFailure);
+                    int length = readPlaybackBlock(adaptiveBuffer, playbackBuffer, targetBufferFrames, captureFailure, session);
                     if (length < 0) break;
-                    if (writeBlock(output, playbackBuffer, length) < length) metrics.incrementWriteErrors();
+                    if (writeBlock(output, playbackBuffer, length, session) < length) metrics.incrementWriteErrors();
                 }
             } finally {
+                if (session != null) session.finish(stopRequested ? "STOP" : "ERROR");
                 adaptiveBuffer.close();
                 safeStop(input);
                 capture.interrupt();
@@ -182,13 +213,16 @@ public final class AudioEngine implements AutoCloseable {
      * the buffer wakes the consumer even when it was waiting for data.
      */
     private void captureAudio(AudioInput input, AudioPipeline pipeline, AdaptivePcmBuffer adaptiveBuffer,
-                              AtomicReference<Throwable> captureFailure) {
+                              AtomicReference<Throwable> captureFailure, AudioDiagnostics session) {
         byte[] inputBuffer = new byte[format.blockBytes()];
         byte[] outputBuffer = new byte[format.blockBytes()];
         int zeroReads = 0;
         try {
             while (!stopRequested && !Thread.currentThread().isInterrupted()) {
-                int bytesRead = readBlock(input, inputBuffer);
+                int bytesRead = 0;
+                if (session != null) session.read.begin();
+                try { bytesRead = readBlock(input, inputBuffer); }
+                finally { if (session != null) session.read.end(bytesRead); }
                 if (stopRequested) break;
                 if (bytesRead == 0) {
                     if (++zeroReads >= MAX_ZERO_READS) {
@@ -200,9 +234,16 @@ public final class AudioEngine implements AutoCloseable {
                 zeroReads = 0;
                 if (bytesRead < 0) throw new IllegalStateException("El dispositivo de entrada fue desconectado");
                 long started = System.nanoTime();
-                pipeline.process(inputBuffer, outputBuffer, bytesRead);
+                if (session != null) session.dsp.begin();
+                try { pipeline.process(inputBuffer, outputBuffer, bytesRead); }
+                finally { if (session != null) session.dsp.end(bytesRead / format.bytesPerFrame()); }
                 long elapsed = System.nanoTime() - started;
-                if (!adaptiveBuffer.putPcm16LittleEndian(outputBuffer, bytesRead)) break;
+                metrics.setLookaheadMillis(processor.latencyFrames() * 1_000.0 / format.sampleRate());
+                boolean accepted = false;
+                if (session != null) session.put.begin();
+                try { accepted = adaptiveBuffer.putPcm16LittleEndian(outputBuffer, bytesRead); }
+                finally { if (session != null) session.put.end(accepted ? bytesRead / format.bytesPerFrame() : 0); }
+                if (!accepted) break;
                 metrics.blockCompleted(elapsed, bytesRead * 1_000.0 /
                         (format.bytesPerFrame() * format.sampleRate()));
             }
@@ -219,8 +260,11 @@ public final class AudioEngine implements AutoCloseable {
      * @return available bytes, or -1 during a normal stop
      */
     private int readPlaybackBlock(AdaptivePcmBuffer adaptiveBuffer, byte[] buffer, int targetBufferFrames,
-                                  AtomicReference<Throwable> captureFailure) throws InterruptedException {
-        int length = adaptiveBuffer.readPcm16LittleEndian(buffer, format.blockFrames(), targetBufferFrames);
+                                  AtomicReference<Throwable> captureFailure, AudioDiagnostics session) throws InterruptedException {
+        int length = 0;
+        if (session != null) session.take.begin();
+        try { length = adaptiveBuffer.readPcm16LittleEndian(buffer, format.blockFrames(), targetBufferFrames); }
+        finally { if (session != null) session.take.end(Math.max(0, length) / format.bytesPerFrame()); }
         metrics.setSynchronization(adaptiveBuffer.bufferedFrames() * 1_000.0 / format.sampleRate(),
                 (adaptiveBuffer.playbackRate() - 1.0) * 1_000_000.0);
         if (length < 0 && !stopRequested) {
@@ -269,14 +313,19 @@ public final class AudioEngine implements AutoCloseable {
      *
      * @return bytes actually accepted by the output
      */
-    private int writeBlock(AudioOutput output, byte[] buffer, int length) {
+    private int writeBlock(AudioOutput output, byte[] buffer, int length, AudioDiagnostics session) {
         int total = 0;
-        while (total < length && !stopRequested) {
-            int count = output.write(buffer, total, length - total);
-            if (count <= 0) break;
-            total += count;
+        if (session != null) session.write.begin();
+        try {
+            while (total < length && !stopRequested) {
+                int count = output.write(buffer, total, length - total);
+                if (count <= 0) break;
+                total += count;
+            }
+            return total;
+        } finally {
+            if (session != null) session.write.end(total);
         }
-        return total;
     }
 
     /**
@@ -318,6 +367,16 @@ public final class AudioEngine implements AutoCloseable {
      */
     public AudioMetrics metrics() { return metrics; }
 
+    public AudioDiagnostics.Snapshot diagnosticSnapshot() {
+        AudioDiagnostics session = diagnostics;
+        return session == null ? AudioDiagnostics.disabledSnapshot() : session.snapshot();
+    }
+
+    public int markDelay() {
+        AudioDiagnostics session = diagnostics;
+        return state.get() == AudioEngineState.RUNNING && session != null ? session.markDelay() : -1;
+    }
+
     /**
      * Registers an observer for subsequent transitions.
      *
@@ -332,5 +391,17 @@ public final class AudioEngine implements AutoCloseable {
     private static String userMessage(Throwable error) { return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage(); }
 
     /** Implements idempotent close by requesting stream shutdown. */
-    @Override public void close() { stop(); }
+    @Override public void close() {
+        stop();
+        // Application exit may wait for the final diagnostic flush; ordinary Stop stays asynchronous.
+        try {
+            Thread thread = worker;
+            if (thread != null && thread != Thread.currentThread()) thread.join(2_000);
+            AudioDiagnostics session = diagnostics;
+            if (session != null) {
+                session.finish("APPLICATION_CLOSE");
+                session.awaitFinished(2_000);
+            }
+        } catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
+    }
 }

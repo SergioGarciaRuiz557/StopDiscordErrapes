@@ -2,6 +2,7 @@ package com.discordaudioguard.ui;
 
 import com.discordaudioguard.application.*;
 import com.discordaudioguard.audio.engine.AudioEngineState;
+import com.discordaudioguard.audio.engine.AudioDiagnostics;
 import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.scene.control.Alert;
@@ -34,6 +35,17 @@ public final class MainViewController implements AutoCloseable {
         view.devices().refreshButton().setOnAction(event -> refreshDevices());
         view.startButton().setOnAction(event -> start());
         view.stopButton().setOnAction(event -> controller.stop());
+        view.diagnostics().markButton().setOnAction(event -> {
+            int number = controller.markDelay();
+            if (number > 0) view.diagnostics().markerRequested(number);
+            else showError("No se pudo guardar la marca", new IllegalStateException("El registro no está activo o está ocupado. Comprueba el estado del diagnóstico."));
+        });
+        view.diagnostics().openFolderButton().setOnAction(event -> {
+            try {
+                java.nio.file.Files.createDirectories(AudioDiagnostics.directory());
+                java.awt.Desktop.getDesktop().open(AudioDiagnostics.directory().toFile());
+            } catch (Exception error) { showError("No se pudo abrir " + AudioDiagnostics.directory(), error); }
+        });
         view.resetButton().setOnAction(event -> { view.dynamics().setParameters(com.discordaudioguard.audio.processing.ProcessingParameters.DEFAULT); controller.resetParameters(); });
         view.dynamics().setOnParametersChanged(controller::updateParameters);
         // The engine publishes in the background; all node access must return to JavaFX.
@@ -41,7 +53,11 @@ public final class MainViewController implements AutoCloseable {
         meterTimer = new AnimationTimer() {
             private long lastUpdate;
             @Override public void handle(long now) {
-                if (now - lastUpdate >= UI_INTERVAL_NANOS) { view.meters().update(controller.metricsSnapshot()); lastUpdate = now; }
+                if (now - lastUpdate >= UI_INTERVAL_NANOS) {
+                    view.meters().update(controller.metricsSnapshot());
+                    view.diagnostics().update(controller.diagnosticSnapshot(), controller.state().engineState());
+                    lastUpdate = now;
+                }
             }
         };
         meterTimer.start();
@@ -56,7 +72,7 @@ public final class MainViewController implements AutoCloseable {
 
     /** Reads visible selections and attempts startup, displaying actionable errors. */
     private void start() {
-        try { controller.start(view.devices().inputSelector().getValue(), view.devices().outputSelector().getValue()); }
+        try { controller.start(view.devices().inputSelector().getValue(), view.devices().outputSelector().getValue(), view.diagnostics().isEnabled()); }
         catch (RuntimeException error) { showError("No se pudo iniciar el procesamiento", error); }
     }
 
@@ -75,7 +91,7 @@ public final class MainViewController implements AutoCloseable {
     }
 
     /** Presents an operational exception in a readable modal dialog. */
-    private static void showError(String heading, RuntimeException error) {
+    private static void showError(String heading, Exception error) {
         Alert alert = new Alert(Alert.AlertType.ERROR); alert.setTitle("Discord Audio Guard");
         alert.setHeaderText(heading); alert.setContentText(error.getMessage()); alert.showAndWait();
     }

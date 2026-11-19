@@ -27,6 +27,10 @@ public final class JavaSoundAudioInput implements AudioInput {
     /** @return capacity configured by the backend, in bytes */
     @Override public int bufferSizeBytes() { return line.getBufferSize(); }
 
+    @Override public int queuedBytes() { return line.available(); }
+
+    @Override public long framePosition() { return line.getLongFramePosition(); }
+
     /** Releases the capture line. */
     @Override public void close() { line.close(); }
 }

@@ -43,7 +43,7 @@ public final class DiscordAudioGuardApplication extends Application {
         scene.getStylesheets().add(getClass().getResource("/com/discordaudioguard/ui/application.css").toExternalForm());
         stage.getIcons().add(new Image(Objects.requireNonNull(
                 getClass().getResource("/com/discordaudioguard/ui/app-icon.png")).toExternalForm()));
-        stage.setTitle("Discord Audio Guard"); stage.setScene(scene); stage.setMinWidth(850); stage.setMinHeight(650);
+        stage.setTitle("Discord Audio Guard 0.1.2"); stage.setScene(scene); stage.setMinWidth(850); stage.setMinHeight(650);
         restoreWindow(stage, controller.configuration().window());
         // Capture geometry before releasing controllers and devices.
         stage.setOnCloseRequest(event -> {

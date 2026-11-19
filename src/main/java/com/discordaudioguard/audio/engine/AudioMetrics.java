@@ -25,6 +25,11 @@ public final class AudioMetrics {
     private volatile double estimatedLatencyMillis, processingBudgetPercent;
     /** Adaptive-buffer occupancy and correction applied to the playback clock. */
     private volatile double adaptiveBufferMillis, playbackRateCorrectionPpm;
+    /** Current DSP delay, published by capture after parameter changes are applied. */
+    private volatile double lookaheadMillis;
+
+    public void setLookaheadMillis(double value) { lookaheadMillis = value; }
+    public double lookaheadMillis() { return lookaheadMillis; }
 
     /** Creates a collector with zero counters and initial levels equivalent to silence. */
     public AudioMetrics() {
